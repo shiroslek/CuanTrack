@@ -2,186 +2,151 @@
 # -*- coding: utf-8 -*-
 """
 Financial Tracker Bot - Chart Generator
-v2.4 - Donut chart, fast render, no heavy shadow loops
+v2.2 - Bar charts for income & expense categories
 """
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import matplotlib.dates as mdates
-import numpy as np
 from datetime import datetime, timedelta
 import os
-
 from database import Database
 from config import CHART_DIR, TIMEZONE
-
-DONUT_COLORS = [
-    '#E8A598', '#C4A882', '#9DC4B8', '#C4A8C8',
-    '#E8C898', '#A8B8C8', '#B8D4A8', '#D4A8B8',
-    '#C8C4A8', '#A8C4D4',
-]
-
 
 class ChartGenerator:
     def __init__(self, db: Database):
         self.db = db
         plt.rcParams['font.family'] = 'DejaVu Sans'
 
-    def _draw_donut(self, labels, sizes, percentages, title, filepath):
-        fig, ax = plt.subplots(figsize=(11, 8), facecolor='#FAF8F5')
-        ax.set_facecolor('#FAF8F5')
-
-        n = len(labels)
-        colors = (DONUT_COLORS * 3)[:n]
-
-        # Donut chart — satu kali render, tidak ada loop shadow
-        wedges, _ = ax.pie(
-            sizes,
-            radius=1.0,
-            startangle=90,
-            colors=colors,
-            wedgeprops=dict(
-                width=0.42,
-                edgecolor='white',
-                linewidth=2.2,
-            ),
-            shadow=True,   # shadow bawaan matplotlib, ringan
-        )
-
-        # Lingkaran dalam
-        center_circle = plt.Circle((0, 0), 0.57, color='#FAF8F5', zorder=10)
-        ax.add_patch(center_circle)
-
-        # Label dengan garis leader
-        for i, (wedge, label, pct) in enumerate(zip(wedges, labels, percentages)):
-            if pct < 2.0:
-                continue
-
-            angle = (wedge.theta2 + wedge.theta1) / 2
-            angle_rad = np.deg2rad(angle)
-
-            x_out = 1.18 * np.cos(angle_rad)
-            y_out = 1.18 * np.sin(angle_rad)
-            x_in  = 0.80 * np.cos(angle_rad)
-            y_in  = 0.80 * np.sin(angle_rad)
-
-            ax.annotate('',
-                xy=(x_in, y_in), xytext=(x_out * 0.96, y_out * 0.96),
-                arrowprops=dict(arrowstyle='-', color='#AAAAAA', lw=0.8),
-                zorder=12)
-
-            ha = 'left' if x_out > 0 else 'right'
-            ax.text(x_out * 1.03, y_out * 1.03 + 0.04,
-                    f'{pct:.1f}%', ha=ha, va='center',
-                    fontsize=8, fontweight='bold', color='#444444', zorder=13)
-            ax.text(x_out * 1.03, y_out * 1.03 - 0.09,
-                    label, ha=ha, va='center',
-                    fontsize=7, color='#777777', zorder=13)
-
-        # Legend
-        legend_patches = [
-            mpatches.Patch(color=colors[i], label=f'{labels[i]} ({percentages[i]:.1f}%)')
-            for i in range(n)
-        ]
-        ax.legend(
-            handles=legend_patches,
-            title='Kategori', title_fontsize=9,
-            loc='center left', bbox_to_anchor=(1.02, 0.5),
-            fontsize=8, frameon=True, framealpha=0.9, edgecolor='#DDDDDD',
-        )
-
-        ax.set_title(title, fontsize=13, fontweight='bold', color='#333333', pad=14)
-        ax.set_xlim(-1.55, 1.55)
-        ax.set_ylim(-1.35, 1.35)
-        ax.axis('equal')
-
-        plt.tight_layout()
-        plt.savefig(filepath, dpi=120, bbox_inches='tight', facecolor='#FAF8F5')
-        plt.close()
-        return filepath
-
-    def generate_income_pie_chart(self, user_id, filename: str = None) -> str:
+    def generate_income_pie_chart(self, filename: str = None) -> str:
+        """Generate bar chart for income by category"""
         if not filename:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'pie_income_{user_id}_{timestamp}.png'
+            filename = f'bar_income_{timestamp}.png'
         filepath = os.path.join(CHART_DIR, filename)
 
-        income_data = self.db.get_income_by_category(user_id)
+        query = """
+            SELECT category, SUM(amount) as total, COUNT(*) as count
+            FROM transactions
+            WHERE type = 'income'
+            GROUP BY category
+            ORDER BY total DESC
+        """
+        self.db.cursor.execute(query)
+        income_data = self.db.cursor.fetchall()
+
         if not income_data:
             return None
 
-        total = sum(row['total'] for row in income_data)
+        total_income = sum(row['total'] for row in income_data)
         labels = [row['category'] for row in income_data]
         sizes  = [row['total'] for row in income_data]
-        percentages = [(s / total * 100) if total > 0 else 0 for s in sizes]
+        percentages = [(s / total_income * 100) if total_income > 0 else 0 for s in sizes]
 
-        return self._draw_donut(labels, sizes, percentages,
-                                'Distribusi Pemasukan per Kategori', filepath)
+        fig, ax = plt.subplots(figsize=(10, 6))
 
-    def generate_expense_pie_chart(self, user_id, filename: str = None) -> str:
+        colors = plt.cm.Greens([0.4 + 0.5 * i / max(len(labels) - 1, 1) for i in range(len(labels))])
+        bars = ax.barh(labels[::-1], sizes[::-1], color=colors[::-1])
+
+        # Label nilai & persentase di ujung bar
+        for bar, size, pct in zip(bars, sizes[::-1], percentages[::-1]):
+            ax.text(
+                bar.get_width() + total_income * 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                f'Rp{size:,.0f}  ({pct:.1f}%)',
+                va='center', fontsize=9
+            )
+
+        ax.set_xlabel('Jumlah (Rp)', fontsize=11)
+        ax.set_title('Distribusi Pemasukan per Kategori', fontsize=14, weight='bold', pad=15)
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'Rp{x:,.0f}'))
+        ax.set_xlim(0, max(sizes) * 1.4)
+        ax.grid(True, axis='x', alpha=0.3, linestyle='--')
+        plt.tight_layout()
+        plt.savefig(filepath, dpi=300, bbox_inches='tight')
+        plt.close()
+        return filepath
+
+    def generate_expense_pie_chart(self, filename: str = None) -> str:
+        """Generate bar chart for expenses by category"""
         if not filename:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'pie_expense_{user_id}_{timestamp}.png'
+            filename = f'bar_expense_{timestamp}.png'
         filepath = os.path.join(CHART_DIR, filename)
 
-        data = self.db.get_spending_by_category(user_id)
+        data = self.db.get_spending_by_category()
         if not data:
             return None
 
-        total = sum(row['total'] for row in data)
+        total_expense = sum(row['total'] for row in data)
         labels = [row['category'] for row in data]
         sizes  = [row['total'] for row in data]
-        percentages = [(s / total * 100) if total > 0 else 0 for s in sizes]
+        percentages = [(s / total_expense * 100) if total_expense > 0 else 0 for s in sizes]
 
-        return self._draw_donut(labels, sizes, percentages,
-                                'Distribusi Pengeluaran per Kategori', filepath)
+        fig, ax = plt.subplots(figsize=(10, 6))
 
-    def generate_pie_chart(self, user_id, filename: str = None) -> str:
-        return self.generate_expense_pie_chart(user_id, filename)
+        colors = plt.cm.Reds([0.4 + 0.5 * i / max(len(labels) - 1, 1) for i in range(len(labels))])
+        bars = ax.barh(labels[::-1], sizes[::-1], color=colors[::-1])
 
-    def generate_trend_chart(self, user_id, days=30, filename: str = None) -> str:
+        for bar, size, pct in zip(bars, sizes[::-1], percentages[::-1]):
+            ax.text(
+                bar.get_width() + total_expense * 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                f'Rp{size:,.0f}  ({pct:.1f}%)',
+                va='center', fontsize=9
+            )
+
+        ax.set_xlabel('Jumlah (Rp)', fontsize=11)
+        ax.set_title('Distribusi Pengeluaran per Kategori', fontsize=14, weight='bold', pad=15)
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'Rp{x:,.0f}'))
+        ax.set_xlim(0, max(sizes) * 1.4)
+        ax.grid(True, axis='x', alpha=0.3, linestyle='--')
+        plt.tight_layout()
+        plt.savefig(filepath, dpi=300, bbox_inches='tight')
+        plt.close()
+        return filepath
+
+    def generate_pie_chart(self, filename: str = None) -> str:
+        """Legacy method - compatibility"""
+        return self.generate_expense_pie_chart(filename)
+
+    def generate_trend_chart(self, days=30, filename: str = None) -> str:
+        """Generate trend chart for daily spending"""
         if not filename:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'trend_chart_{user_id}_{timestamp}.png'
+            filename = f'trend_chart_{timestamp}.png'
         filepath = os.path.join(CHART_DIR, filename)
 
         end_date   = datetime.now(TIMEZONE)
         start_date = end_date - timedelta(days=days)
 
         daily_data = {}
-        current = start_date
-        while current <= end_date:
-            date_str = current.strftime("%Y-%m-%d")
-            daily_data[date_str] = self.db.get_total_by_type(user_id, 'expense', date_str, date_str)
-            current += timedelta(days=1)
+        current_date = start_date
+        while current_date <= end_date:
+            date_str = current_date.strftime("%Y-%m-%d")
+            daily_data[date_str] = self.db.get_total_by_type('expense', date_str, date_str)
+            current_date += timedelta(days=1)
 
         if not daily_data or sum(daily_data.values()) == 0:
             return None
 
-        date_objects = [datetime.strptime(d, "%Y-%m-%d") for d in daily_data]
+        dates   = list(daily_data.keys())
         amounts = list(daily_data.values())
+        date_objects = [datetime.strptime(d, "%Y-%m-%d") for d in dates]
 
-        fig, ax = plt.subplots(figsize=(11, 5), facecolor='#FAF8F5')
-        ax.set_facecolor('#FAF8F5')
-        ax.plot(date_objects, amounts, marker='o', linewidth=2,
-                markersize=4, color='#E74C3C', zorder=5)
-        ax.fill_between(date_objects, amounts, alpha=0.15, color='#E74C3C')
-
-        ax.set_xlabel('Tanggal', fontsize=11)
-        ax.set_ylabel('Pengeluaran (Rp)', fontsize=11)
-        ax.set_title(f'Trend Pengeluaran Harian ({days} Hari Terakhir)',
-                     fontsize=13, fontweight='bold', color='#333333')
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.plot(date_objects, amounts, marker='o', linewidth=2, markersize=4, color='#e74c3c')
+        ax.fill_between(date_objects, amounts, alpha=0.3, color='#e74c3c')
+        ax.set_xlabel('Tanggal', fontsize=12)
+        ax.set_ylabel('Pengeluaran (Rp)', fontsize=12)
+        ax.set_title(f'Trend Pengeluaran Harian ({days} Hari Terakhir)', fontsize=14, weight='bold')
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
         ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, days // 10)))
         plt.xticks(rotation=45, ha='right')
-        ax.grid(True, alpha=0.2, linestyle='--')
+        ax.grid(True, alpha=0.3, linestyle='--')
         ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'Rp{x:,.0f}'))
-        for spine in ax.spines.values():
-            spine.set_color('#DDDDDD')
-
         plt.tight_layout()
-        plt.savefig(filepath, dpi=120, bbox_inches='tight', facecolor='#FAF8F5')
+        plt.savefig(filepath, dpi=300, bbox_inches='tight')
         plt.close()
         return filepath
