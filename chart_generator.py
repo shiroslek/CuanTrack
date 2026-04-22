@@ -9,6 +9,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import numpy as np
 from datetime import datetime, timedelta
 import os
 
@@ -55,15 +56,17 @@ class ChartGenerator:
         for row in income_data:
             pct = (row['total'] / total_income * 100) if total_income > 0 else 0
             labels.append(f"{row['category']}")
-            sizes.append(row['total'])
+            sizes.append(float(row['total']))  # FIX: convert to float
             percentages.append(pct)
 
         # Create figure
         fig, ax = plt.subplots(figsize=(10, 8))
 
-        # Create pie chart
-        colors = plt.cm.Greens(range(50, 200, int(150/len(labels))))
+        # FIX: use np.linspace(0.3, 0.8) — colormap expects float values 0.0-1.0
+        # The original range(50, 200, ...) was incorrect and caused TypeError
+        colors = [plt.cm.Greens(i) for i in np.linspace(0.3, 0.8, len(labels))]
 
+        # Create pie chart
         wedges, texts, autotexts = ax.pie(
             sizes,
             labels=None,
@@ -88,10 +91,10 @@ class ChartGenerator:
             fontsize=9
         )
 
-        # FIX: Hapus ax.set_title agar tidak nabrak header PDF
+        # FIX: Hapus set_title agar tidak nabrak header "DISTRIBUSI PEMASUKAN" di PDF
         plt.tight_layout()
-        plt.subplots_adjust(top=0.92)
-        plt.savefig(filepath, dpi=300, bbox_inches='tight')
+        plt.subplots_adjust(top=0.95)
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
         plt.close()
 
         return filepath
@@ -121,14 +124,14 @@ class ChartGenerator:
         for row in data:
             pct = (row['total'] / total_expense * 100) if total_expense > 0 else 0
             labels.append(f"{row['category']}")
-            sizes.append(row['total'])
+            sizes.append(float(row['total']))  # FIX: convert to float
             percentages.append(pct)
 
         # Create figure
         fig, ax = plt.subplots(figsize=(10, 8))
 
-        # Colors
-        colors = plt.cm.Reds(range(50, 200, int(150/len(labels))))
+        # FIX: use np.linspace(0.3, 0.8) — colormap expects float values 0.0-1.0
+        colors = [plt.cm.Reds(i) for i in np.linspace(0.3, 0.8, len(labels))]
 
         # Create pie chart
         wedges, texts, autotexts = ax.pie(
@@ -155,10 +158,10 @@ class ChartGenerator:
             fontsize=9
         )
 
-        # FIX: Hapus ax.set_title agar tidak nabrak header PDF
+        # FIX: Hapus set_title agar tidak nabrak header "DISTRIBUSI PENGELUARAN" di PDF
         plt.tight_layout()
-        plt.subplots_adjust(top=0.92)
-        plt.savefig(filepath, dpi=300, bbox_inches='tight')
+        plt.subplots_adjust(top=0.95)
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
         plt.close()
 
         return filepath
@@ -193,7 +196,8 @@ class ChartGenerator:
 
         # Prepare data
         dates = list(daily_data.keys())
-        amounts = list(daily_data.values())
+        # FIX: convert to float — large rupiah integers cause "Python int too large to convert to C int"
+        amounts = [float(v) for v in daily_data.values()]
 
         # Convert dates to datetime
         date_objects = [datetime.strptime(d, "%Y-%m-%d") for d in dates]
@@ -212,17 +216,17 @@ class ChartGenerator:
 
         # Format x-axis
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
-        ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, days//10)))
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, days // 10)))
         plt.xticks(rotation=45, ha='right')
 
         # Grid
         ax.grid(True, alpha=0.3, linestyle='--')
 
-        # Format y-axis
-        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'Rp{x:,.0f}'))
+        # FIX: float-safe y-axis formatter
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'Rp{float(x):,.0f}'))
 
         plt.tight_layout()
-        plt.savefig(filepath, dpi=300, bbox_inches='tight')
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
         plt.close()
 
         return filepath
