@@ -6,6 +6,8 @@ by Shiroslek
 """
 
 import logging
+import subprocess  # ← TAMBAHAN SEMENTARA
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -32,36 +34,44 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 def main():
     """Main function to run the bot"""
-    
+
+    # ================================================================
+    # JALANKAN MIGRASI DATA HISTORIS - HAPUS SETELAH DEPLOY PERTAMA!
+    # ================================================================
+    subprocess.run(["python", "migrate_historical.py"])  # ← HAPUS BARIS INI SETELAH DEPLOY
+    # ================================================================
+
     # Initialize database
     db = Database()
     logger.info("Database initialized")
-    
+
     # Create application
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
+
     # Register command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
-    
+
     # Register callback query handler (for all inline keyboard buttons)
     application.add_handler(CallbackQueryHandler(handle_callback))
-    
+
     # Register message handler (for text input during flows)
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         handle_message_input
     ))
-    
+
     # Start bot
     logger.info(f"🚀 {BOT_NAME} is running...")
     print(f"🚀 {BOT_NAME} is running...")
     print("Press Ctrl+C to stop")
-    
+
     # Run bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == '__main__':
     main()
