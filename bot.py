@@ -6,7 +6,6 @@ by Shiroslek
 """
 
 import logging
-import subprocess  # ← TAMBAHAN SEMENTARA
 
 from telegram import Update
 from telegram.ext import (
@@ -38,11 +37,6 @@ logger = logging.getLogger(__name__)
 def main():
     """Main function to run the bot"""
 
-    # ================================================================
-    # JALANKAN MIGRASI DATA HISTORIS - HAPUS SETELAH DEPLOY PERTAMA!
-    # ================================================================
-    subprocess.run(["python", "migrate_historical.py"])  # ← HAPUS BARIS INI SETELAH DEPLOY
-    # ================================================================
 
     # Initialize database
     db = Database()
