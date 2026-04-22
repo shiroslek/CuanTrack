@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Financial Tracker Bot - Chart Generator
-v2.1 - Separate income/expense pie charts with percentages
+v2.5 - Bar chart (horizontal) untuk income & expense
 """
 
 import matplotlib
@@ -20,213 +20,153 @@ from config import CHART_DIR, TIMEZONE
 class ChartGenerator:
     def __init__(self, db: Database):
         self.db = db
-        # Set font
         plt.rcParams['font.family'] = 'DejaVu Sans'
 
-    def generate_income_pie_chart(self, filename: str = None) -> str:
-        """Generate pie chart for income by category"""
+    def _draw_bar_chart(self, labels, sizes, percentages, title, filepath, color_main, color_bar):
+        """Horizontal bar chart dengan label persentase"""
+        n = len(labels)
+        fig, ax = plt.subplots(figsize=(10, max(4, n * 0.55 + 1.5)), facecolor='#FAF8F5')
+        ax.set_facecolor('#FAF8F5')
+
+        y_pos = np.arange(n)
+
+        # Bar
+        bars = ax.barh(
+            y_pos, sizes,
+            color=color_bar,
+            edgecolor='white',
+            linewidth=0.8,
+            height=0.6,
+        )
+
+        # Label di ujung bar: nominal + persentase
+        max_val = max(sizes) if sizes else 1
+        for i, (bar, amt, pct) in enumerate(zip(bars, sizes, percentages)):
+            ax.text(
+                bar.get_width() + max_val * 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                f'Rp{amt:,.0f}  ({pct:.1f}%)',
+                va='center', ha='left',
+                fontsize=8, color='#444444'
+            )
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels, fontsize=9)
+        ax.invert_yaxis()  # terbesar di atas
+
+        ax.set_xlabel('Jumlah (Rp)', fontsize=10)
+        ax.set_title(title, fontsize=13, fontweight='bold', color='#333333', pad=14)
+
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'Rp{x:,.0f}'))
+        plt.xticks(rotation=20, ha='right', fontsize=8)
+
+        # Extend x-axis biar label tidak terpotong
+        ax.set_xlim(0, max_val * 1.45)
+
+        ax.grid(True, axis='x', alpha=0.2, linestyle='--')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        for spine in ['left', 'bottom']:
+            ax.spines[spine].set_color('#DDDDDD')
+
+        plt.tight_layout()
+        plt.savefig(filepath, dpi=130, bbox_inches='tight', facecolor='#FAF8F5')
+        plt.close()
+        return filepath
+
+    def generate_income_pie_chart(self, user_id, filename: str = None) -> str:
         if not filename:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'pie_income_{timestamp}.png'
-
+            filename = f'bar_income_{user_id}_{timestamp}.png'
         filepath = os.path.join(CHART_DIR, filename)
 
-        # Get income data grouped by category
-        query = """
-            SELECT category, SUM(amount) as total, COUNT(*) as count
-            FROM transactions
-            WHERE type = 'income'
-            GROUP BY category
-            ORDER BY total DESC
-        """
-        self.db.cursor.execute(query)
-        income_data = self.db.cursor.fetchall()
-
+        income_data = self.db.get_income_by_category(user_id)
         if not income_data:
             return None
 
-        # Calculate total and percentages
-        total_income = sum(row['total'] for row in income_data)
+        total = sum(row['total'] for row in income_data)
+        labels = [row['category'] for row in income_data]
+        sizes  = [row['total'] for row in income_data]
+        percentages = [(s / total * 100) if total > 0 else 0 for s in sizes]
 
-        # Prepare data
-        labels = []
-        sizes = []
-        percentages = []
-
-        for row in income_data:
-            pct = (row['total'] / total_income * 100) if total_income > 0 else 0
-            labels.append(f"{row['category']}")
-            sizes.append(float(row['total']))  # FIX: convert to float
-            percentages.append(pct)
-
-        # Create figure
-        fig, ax = plt.subplots(figsize=(10, 8))
-
-        # FIX: use np.linspace(0.3, 0.8) — colormap expects float values 0.0-1.0
-        # The original range(50, 200, ...) was incorrect and caused TypeError
-        colors = [plt.cm.Greens(i) for i in np.linspace(0.3, 0.8, len(labels))]
-
-        # Create pie chart
-        wedges, texts, autotexts = ax.pie(
-            sizes,
-            labels=None,
-            autopct='%1.1f%%',
-            colors=colors,
-            startangle=90
+        return self._draw_bar_chart(
+            labels, sizes, percentages,
+            'Distribusi Pemasukan per Kategori',
+            filepath,
+            color_main='#27AE60',
+            color_bar='#82C99F',
         )
 
-        # Style percentage text
-        for autotext in autotexts:
-            autotext.set_color('white')
-            autotext.set_fontsize(10)
-            autotext.set_weight('bold')
-
-        # Add legend with percentages
-        legend_labels = [f"{label} ({pct:.1f}%)" for label, pct in zip(labels, percentages)]
-        ax.legend(
-            legend_labels,
-            title="Kategori",
-            loc="center left",
-            bbox_to_anchor=(1, 0, 0.5, 1),
-            fontsize=9
-        )
-
-        # FIX: Hapus set_title agar tidak nabrak header "DISTRIBUSI PEMASUKAN" di PDF
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.95)
-        plt.savefig(filepath, dpi=150, bbox_inches='tight')
-        plt.close()
-
-        return filepath
-
-    def generate_expense_pie_chart(self, filename: str = None) -> str:
-        """Generate pie chart for expenses by category"""
+    def generate_expense_pie_chart(self, user_id, filename: str = None) -> str:
         if not filename:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'pie_expense_{timestamp}.png'
-
+            filename = f'bar_expense_{user_id}_{timestamp}.png'
         filepath = os.path.join(CHART_DIR, filename)
 
-        # Get expense data
-        data = self.db.get_spending_by_category()
-
+        data = self.db.get_spending_by_category(user_id)
         if not data:
             return None
 
-        # Calculate total
-        total_expense = sum(row['total'] for row in data)
+        total = sum(row['total'] for row in data)
+        labels = [row['category'] for row in data]
+        sizes  = [row['total'] for row in data]
+        percentages = [(s / total * 100) if total > 0 else 0 for s in sizes]
 
-        # Prepare data
-        labels = []
-        sizes = []
-        percentages = []
-
-        for row in data:
-            pct = (row['total'] / total_expense * 100) if total_expense > 0 else 0
-            labels.append(f"{row['category']}")
-            sizes.append(float(row['total']))  # FIX: convert to float
-            percentages.append(pct)
-
-        # Create figure
-        fig, ax = plt.subplots(figsize=(10, 8))
-
-        # FIX: use np.linspace(0.3, 0.8) — colormap expects float values 0.0-1.0
-        colors = [plt.cm.Reds(i) for i in np.linspace(0.3, 0.8, len(labels))]
-
-        # Create pie chart
-        wedges, texts, autotexts = ax.pie(
-            sizes,
-            labels=None,
-            autopct='%1.1f%%',
-            colors=colors,
-            startangle=90
+        return self._draw_bar_chart(
+            labels, sizes, percentages,
+            'Distribusi Pengeluaran per Kategori',
+            filepath,
+            color_main='#E74C3C',
+            color_bar='#F1948A',
         )
 
-        # Style percentage text
-        for autotext in autotexts:
-            autotext.set_color('white')
-            autotext.set_fontsize(10)
-            autotext.set_weight('bold')
+    def generate_pie_chart(self, user_id, filename: str = None) -> str:
+        return self.generate_expense_pie_chart(user_id, filename)
 
-        # Add legend with percentages
-        legend_labels = [f"{label} ({pct:.1f}%)" for label, pct in zip(labels, percentages)]
-        ax.legend(
-            legend_labels,
-            title="Kategori",
-            loc="center left",
-            bbox_to_anchor=(1, 0, 0.5, 1),
-            fontsize=9
-        )
-
-        # FIX: Hapus set_title agar tidak nabrak header "DISTRIBUSI PENGELUARAN" di PDF
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.95)
-        plt.savefig(filepath, dpi=150, bbox_inches='tight')
-        plt.close()
-
-        return filepath
-
-    def generate_pie_chart(self, filename: str = None) -> str:
-        """Legacy method - generates expense pie chart for compatibility"""
-        return self.generate_expense_pie_chart(filename)
-
-    def generate_trend_chart(self, days=30, filename: str = None) -> str:
-        """Generate trend chart for daily spending"""
+    def generate_trend_chart(self, user_id, days=30, filename: str = None) -> str:
         if not filename:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'trend_chart_{timestamp}.png'
-
+            filename = f'trend_chart_{user_id}_{timestamp}.png'
         filepath = os.path.join(CHART_DIR, filename)
 
-        # Get date range
-        end_date = datetime.now(TIMEZONE)
+        end_date   = datetime.now(TIMEZONE)
         start_date = end_date - timedelta(days=days)
 
-        # Get daily spending
         daily_data = {}
-        current_date = start_date
-        while current_date <= end_date:
-            date_str = current_date.strftime("%Y-%m-%d")
-            daily_expense = self.db.get_total_by_type('expense', date_str, date_str)
-            daily_data[date_str] = daily_expense
-            current_date += timedelta(days=1)
+        current = start_date
+        while current <= end_date:
+            date_str = current.strftime("%Y-%m-%d")
+            daily_data[date_str] = self.db.get_total_by_type(user_id, 'expense', date_str, date_str)
+            current += timedelta(days=1)
 
         if not daily_data or sum(daily_data.values()) == 0:
             return None
 
-        # Prepare data
-        dates = list(daily_data.keys())
-        # FIX: convert to float — large rupiah integers cause "Python int too large to convert to C int"
-        amounts = [float(v) for v in daily_data.values()]
+        date_objects = [datetime.strptime(d, "%Y-%m-%d") for d in daily_data]
+        amounts = list(daily_data.values())
 
-        # Convert dates to datetime
-        date_objects = [datetime.strptime(d, "%Y-%m-%d") for d in dates]
+        fig, ax = plt.subplots(figsize=(11, 5), facecolor='#FAF8F5')
+        ax.set_facecolor('#FAF8F5')
 
-        # Create figure
-        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.plot(date_objects, amounts, marker='o', linewidth=2,
+                markersize=4, color='#E74C3C', zorder=5)
+        ax.fill_between(date_objects, amounts, alpha=0.15, color='#E74C3C')
 
-        # Plot
-        ax.plot(date_objects, amounts, marker='o', linewidth=2, markersize=4, color='#e74c3c')
-        ax.fill_between(date_objects, amounts, alpha=0.3, color='#e74c3c')
-
-        # Format
-        ax.set_xlabel('Tanggal', fontsize=12)
-        ax.set_ylabel('Pengeluaran (Rp)', fontsize=12)
-        ax.set_title(f'Trend Pengeluaran Harian ({days} Hari Terakhir)', fontsize=14, weight='bold')
-
-        # Format x-axis
+        ax.set_xlabel('Tanggal', fontsize=11)
+        ax.set_ylabel('Pengeluaran (Rp)', fontsize=11)
+        ax.set_title(f'Trend Pengeluaran Harian ({days} Hari Terakhir)',
+                     fontsize=13, fontweight='bold', color='#333333')
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
         ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, days // 10)))
         plt.xticks(rotation=45, ha='right')
-
-        # Grid
-        ax.grid(True, alpha=0.3, linestyle='--')
-
-        # FIX: float-safe y-axis formatter
-        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'Rp{float(x):,.0f}'))
+        ax.grid(True, alpha=0.2, linestyle='--')
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'Rp{x:,.0f}'))
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        for spine in ['left', 'bottom']:
+            ax.spines[spine].set_color('#DDDDDD')
 
         plt.tight_layout()
-        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.savefig(filepath, dpi=120, bbox_inches='tight', facecolor='#FAF8F5')
         plt.close()
-
         return filepath
