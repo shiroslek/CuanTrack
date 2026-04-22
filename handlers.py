@@ -384,6 +384,7 @@ async def show_transactions_by_date(update: Update, context: ContextTypes.DEFAUL
 
     date_obj = datetime.strptime(date, "%Y-%m-%d")
     date_display = date_obj.strftime("%d %b %Y")
+      
 await query.message.reply_text(
             msg,
         f"📅 *{date_display}*\n\nPilih transaksi:",
