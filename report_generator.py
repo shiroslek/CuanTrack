@@ -232,19 +232,19 @@ class ReportGenerator:
             story.append(notes_table)
             story.append(PageBreak())
 
-        # PIE CHARTS
+        # BAR CHARTS - masing-masing halaman sendiri
         income_chart = self.chart_gen.generate_income_pie_chart(user_id)
         if income_chart:
             story.append(Paragraph("DISTRIBUSI PEMASUKAN PER KATEGORI", styles['Heading2']))
             story.append(Spacer(1, 8))
-            story.append(Image(income_chart, width=16*cm, height=12*cm))
-            story.append(Spacer(1, 20))
+            story.append(Image(income_chart, width=17*cm, height=11*cm))
+            story.append(PageBreak())
 
         expense_chart = self.chart_gen.generate_expense_pie_chart(user_id)
         if expense_chart:
             story.append(Paragraph("DISTRIBUSI PENGELUARAN PER KATEGORI", styles['Heading2']))
             story.append(Spacer(1, 8))
-            story.append(Image(expense_chart, width=16*cm, height=12*cm))
+            story.append(Image(expense_chart, width=17*cm, height=11*cm))
 
         doc.build(story)
         return filepath

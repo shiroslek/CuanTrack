@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Financial Tracker Bot - Chart Generator
-v2.5 - Bar chart (horizontal) untuk income & expense
+v2.6 - Vertical bar chart (kategori di bawah, jumlah di samping/y-axis)
 """
 
 import matplotlib
@@ -22,48 +22,43 @@ class ChartGenerator:
         self.db = db
         plt.rcParams['font.family'] = 'DejaVu Sans'
 
-    def _draw_bar_chart(self, labels, sizes, percentages, title, filepath, color_main, color_bar):
-        """Horizontal bar chart dengan label persentase"""
+    def _draw_bar_chart(self, labels, sizes, percentages, title, filepath, color_bar):
+        """Vertical bar chart — kategori di bawah (x), jumlah di kiri (y)"""
         n = len(labels)
-        fig, ax = plt.subplots(figsize=(10, max(4, n * 0.55 + 1.5)), facecolor='#FAF8F5')
+        fig, ax = plt.subplots(figsize=(max(8, n * 1.1 + 2), 7), facecolor='#FAF8F5')
         ax.set_facecolor('#FAF8F5')
 
-        y_pos = np.arange(n)
+        x_pos = np.arange(n)
 
-        # Bar
-        bars = ax.barh(
-            y_pos, sizes,
+        bars = ax.bar(
+            x_pos, sizes,
             color=color_bar,
             edgecolor='white',
             linewidth=0.8,
-            height=0.6,
+            width=0.6,
         )
 
-        # Label di ujung bar: nominal + persentase
+        # Label di atas tiap batang: nominal + persentase
         max_val = max(sizes) if sizes else 1
-        for i, (bar, amt, pct) in enumerate(zip(bars, sizes, percentages)):
+        for bar, amt, pct in zip(bars, sizes, percentages):
             ax.text(
-                bar.get_width() + max_val * 0.01,
-                bar.get_y() + bar.get_height() / 2,
-                f'Rp{amt:,.0f}  ({pct:.1f}%)',
-                va='center', ha='left',
-                fontsize=8, color='#444444'
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max_val * 0.015,
+                f'Rp{amt:,.0f}\n({pct:.1f}%)',
+                ha='center', va='bottom',
+                fontsize=7.5, color='#444444', linespacing=1.4
             )
 
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(labels, fontsize=9)
-        ax.invert_yaxis()  # terbesar di atas
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(labels, fontsize=9, rotation=25, ha='right')
 
-        ax.set_xlabel('Jumlah (Rp)', fontsize=10)
+        ax.set_ylabel('Jumlah (Rp)', fontsize=10)
         ax.set_title(title, fontsize=13, fontweight='bold', color='#333333', pad=14)
 
-        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'Rp{x:,.0f}'))
-        plt.xticks(rotation=20, ha='right', fontsize=8)
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'Rp{x:,.0f}'))
+        ax.set_ylim(0, max_val * 1.30)
 
-        # Extend x-axis biar label tidak terpotong
-        ax.set_xlim(0, max_val * 1.45)
-
-        ax.grid(True, axis='x', alpha=0.2, linestyle='--')
+        ax.grid(True, axis='y', alpha=0.2, linestyle='--')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         for spine in ['left', 'bottom']:
@@ -92,9 +87,7 @@ class ChartGenerator:
         return self._draw_bar_chart(
             labels, sizes, percentages,
             'Distribusi Pemasukan per Kategori',
-            filepath,
-            color_main='#27AE60',
-            color_bar='#82C99F',
+            filepath, color_bar='#82C99F',
         )
 
     def generate_expense_pie_chart(self, user_id, filename: str = None) -> str:
@@ -115,9 +108,7 @@ class ChartGenerator:
         return self._draw_bar_chart(
             labels, sizes, percentages,
             'Distribusi Pengeluaran per Kategori',
-            filepath,
-            color_main='#E74C3C',
-            color_bar='#F1948A',
+            filepath, color_bar='#F1948A',
         )
 
     def generate_pie_chart(self, user_id, filename: str = None) -> str:
@@ -147,11 +138,9 @@ class ChartGenerator:
 
         fig, ax = plt.subplots(figsize=(11, 5), facecolor='#FAF8F5')
         ax.set_facecolor('#FAF8F5')
-
         ax.plot(date_objects, amounts, marker='o', linewidth=2,
                 markersize=4, color='#E74C3C', zorder=5)
         ax.fill_between(date_objects, amounts, alpha=0.15, color='#E74C3C')
-
         ax.set_xlabel('Tanggal', fontsize=11)
         ax.set_ylabel('Pengeluaran (Rp)', fontsize=11)
         ax.set_title(f'Trend Pengeluaran Harian ({days} Hari Terakhir)',
@@ -165,7 +154,6 @@ class ChartGenerator:
         ax.spines['right'].set_visible(False)
         for spine in ['left', 'bottom']:
             ax.spines[spine].set_color('#DDDDDD')
-
         plt.tight_layout()
         plt.savefig(filepath, dpi=120, bbox_inches='tight', facecolor='#FAF8F5')
         plt.close()
