@@ -384,9 +384,8 @@ async def show_transactions_by_date(update: Update, context: ContextTypes.DEFAUL
 
     date_obj = datetime.strptime(date, "%Y-%m-%d")
     date_display = date_obj.strftime("%d %b %Y")
-      
-await query.message.reply_text(
-            msg,
+
+    await query.edit_message_text(
         f"📅 *{date_display}*\n\nPilih transaksi:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
@@ -1084,7 +1083,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             del context.user_data['pending_transaction']
 
-            await update.message.reply_text(
+            await query.edit_message_text(
                 msg,
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("« Kembali ke Settings", callback_data="settings_categories")
