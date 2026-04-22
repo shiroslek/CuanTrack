@@ -282,6 +282,24 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode='Markdown'
         )
 
+    elif step == 'waiting_category_rename':
+        old_name = pending['old_cat_name']
+        success = db.update_category(old_name, new_name=text)
+        del context.user_data['pending_transaction']
+
+        if success:
+            msg = f"✅ Nama kategori berhasil diubah dari *{old_name}* ke *{text}*!"
+        else:
+            msg = f"❌ Gagal mengubah nama. Mungkin nama *{text}* sudah ada."
+
+        await update.message.reply_text(
+            msg,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Kembali ke Settings", callback_data="settings_categories")
+            ]]),
+            parse_mode='Markdown'
+        )
+
     elif step == 'waiting_category_name':
         pending['new_category_name'] = text
         pending['step'] = 'select_emoji'
@@ -1140,6 +1158,60 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
+        return
+
+    if data.startswith("cat_rename_"):
+        cat_name = data.replace("cat_rename_", "")
+        context.user_data['pending_transaction'] = {
+            'step': 'waiting_category_rename',
+            'old_cat_name': cat_name
+        }
+        await query.answer()
+        await query.edit_message_text(
+            f"✏️ Ketik nama baru untuk kategori *{cat_name}*:",
+            parse_mode='Markdown'
+        )
+        return
+
+    if data.startswith("cat_reicon_"):
+        cat_name = data.replace("cat_reicon_", "")
+        context.user_data['pending_transaction'] = {
+            'step': 'waiting_category_reicon',
+            'old_cat_name': cat_name
+        }
+        # Show emoji grid
+        keyboard = []
+        row = []
+        for emoji in EMOJI_LIST:
+            row.append(InlineKeyboardButton(emoji, callback_data=f"reicon_{emoji}_{cat_name}"))
+            if len(row) == 5:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("« Batal", callback_data="settings_categories")])
+        await query.answer()
+        await query.edit_message_text(
+            f"🎨 Pilih icon baru untuk *{cat_name}*:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return
+
+    if data.startswith("reicon_"):
+        # Format: reicon_{emoji}_{cat_name}
+        parts = data.split("_", 2)
+        emoji = parts[1]
+        cat_name = parts[2]
+        db.update_category(cat_name, new_icon=emoji)
+        await query.answer()
+        await query.edit_message_text(
+            f"✅ Icon kategori *{cat_name}* berhasil diubah ke {emoji}!",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Kembali ke Settings", callback_data="settings_categories")
+            ]]),
+            parse_mode='Markdown'
+        )
         return
 
     if data == "cat_delete_select_type":
