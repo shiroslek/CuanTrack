@@ -6,10 +6,8 @@ by Shiroslek
 """
 
 import logging
-import asyncio
-import requests
+import urllib.request
 from telegram import Update
-from telegram.error import Conflict, NetworkError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -40,12 +38,9 @@ def delete_webhook():
     """Hapus webhook aktif sebelum mulai polling — mencegah Conflict error."""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
-        resp = requests.get(url, timeout=10)
-        data = resp.json()
-        if data.get("ok"):
-            logger.info("✅ Webhook deleted successfully")
-        else:
-            logger.warning(f"⚠️ deleteWebhook response: {data}")
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = resp.read().decode()
+            logger.info(f"✅ deleteWebhook: {data}")
     except Exception as e:
         logger.warning(f"⚠️ Could not delete webhook: {e}")
 
@@ -81,12 +76,11 @@ def main():
     print(f"🚀 {BOT_NAME} is running...")
     print("Press Ctrl+C to stop")
 
-    # Run polling dengan drop_pending_updates=True
-    # agar tidak crash jika ada update lama yang menumpuk
+    # Run polling
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
-        stop_signals=None        # Railway handles shutdown sendiri
+        stop_signals=None
     )
 
 
