@@ -84,19 +84,22 @@ def get_main_menu_keyboard():
 # ==================== SAFE EDIT ====================
 
 async def safe_edit(query, text, reply_markup=None, parse_mode='Markdown'):
-    """Edit pesan; jika gagal (pesan lama/expired) kirim pesan baru."""
+    """Edit pesan; jika gagal (pesan lama/expired/identical) kirim pesan baru."""
     try:
         await query.edit_message_text(
             text,
             reply_markup=reply_markup,
             parse_mode=parse_mode
         )
-    except BadRequest:
-        await query.message.reply_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
-        )
+    except Exception:
+        try:
+            await query.message.reply_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode
+            )
+        except Exception as e2:
+            print(f"safe_edit fallback also failed: {e2}")
 
 
 # ==================== START & HELP ====================
@@ -685,6 +688,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "cal_ignore":
         await query.answer()
         return
+
+    try:
+        await _handle_callback_inner(update, context, query, data)
+    except Exception as e:
+        print(f"Callback error [{data}]: {e}")
+        try:
+            await query.answer("❌ Terjadi error, coba lagi.")
+        except Exception:
+            pass
+        try:
+            await query.message.reply_text(
+                f"❌ Terjadi error. Ketuk /start atau tombol Dashboard.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Dashboard", callback_data="back_to_main")
+                ]])
+            )
+        except Exception:
+            pass
+
+
+async def _handle_callback_inner(update, context, query, data):
 
     # ── DASHBOARD ──
     if data == "back_to_main":
