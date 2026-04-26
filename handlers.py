@@ -14,7 +14,14 @@ from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 import calendar
 
-from config import TIMEZONE, BOT_NAME, EMOJI_LIST, INCOME_EXAMPLE_TEXT, EXPENSE_EXAMPLE_TEXT
+from config import TIMEZONE, BOT_NAME, EMOJI_LIST
+
+# Fallback jika tidak ada di config.py
+try:
+    from config import INCOME_EXAMPLE_TEXT, EXPENSE_EXAMPLE_TEXT
+except ImportError:
+    INCOME_EXAMPLE_TEXT = "Gaji bulanan, Profit Trading, dll"
+    EXPENSE_EXAMPLE_TEXT = "Beli geprek, Bayar listrik, dll"
 from database import Database
 from parser import NumberParser
 from calculator import Calculator
