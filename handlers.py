@@ -96,7 +96,6 @@ def get_persistent_keyboard():
     return ReplyKeyboardMarkup(
         [[KeyboardButton("🏠 Dashboard")]],
         resize_keyboard=True,
-        persistent=True,
         is_persistent=True
     )
 
