@@ -2,11 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 Financial Tracker Bot - Report Generator
-v2.3 - Multi-user + Monthly separation in PDF/Excel
+v2.4 - Monthly carry-over saldo + charts + notes in PDF
 """
 
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
+from datetime import datetime, timedelta
 import calendar as cal_module
 
 from reportlab.lib.pagesizes import A4
@@ -30,28 +29,25 @@ from parser import NumberParser
 from chart_generator import ChartGenerator
 
 
+# ── Helper functions ──────────────────────────────────────────
+
 def _get_all_months(user_id, db) -> list:
-    """
-    Ambil semua bulan yang ada transaksinya untuk user ini.
-    Return list of (year, month) sorted ascending.
-    """
+    """Semua bulan yang ada transaksinya, sorted ascending."""
     db.cursor.execute("""
         SELECT DISTINCT substr(date, 1, 7) as ym
         FROM transactions
         WHERE user_id = ?
         ORDER BY ym ASC
     """, (user_id,))
-    rows = db.cursor.fetchall()
     result = []
-    for row in rows:
-        ym = row[0]  # "2026-04"
-        y, m = int(ym[:4]), int(ym[5:7])
-        result.append((y, m))
+    for row in db.cursor.fetchall():
+        ym = row[0]
+        result.append((int(ym[:4]), int(ym[5:7])))
     return result
 
 
 def _month_range(year: int, month: int):
-    """Return (start_date, end_date) string untuk satu bulan."""
+    """(start_date, end_date) untuk satu bulan."""
     start = f"{year:04d}-{month:02d}-01"
     last_day = cal_module.monthrange(year, month)[1]
     end = f"{year:04d}-{month:02d}-{last_day:02d}"
@@ -59,8 +55,6 @@ def _month_range(year: int, month: int):
 
 
 def _month_label(year: int, month: int) -> str:
-    dt = datetime(year, month, 1)
-    # Format: "April 2026"
     bulan_id = {
         1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
         5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
@@ -69,6 +63,24 @@ def _month_label(year: int, month: int) -> str:
     return f"{bulan_id[month]} {year}"
 
 
+def _saldo_awal_bulan(user_id, db, year, month) -> int:
+    """
+    Saldo akhir bulan sebelumnya = semua pemasukan - semua pengeluaran
+    s.d. hari terakhir bulan sebelumnya.
+    Otomatis jadi saldo awal bulan (year, month).
+    """
+    first_this = datetime(year, month, 1)
+    last_prev = first_this - timedelta(days=1)
+    if last_prev.year < 2000:
+        return 0
+    end_prev = last_prev.strftime("%Y-%m-%d")
+    inc = db.get_total_by_type(user_id, 'income', end_date=end_prev)
+    exp = db.get_total_by_type(user_id, 'expense', end_date=end_prev)
+    return inc - exp
+
+
+# ── Main class ────────────────────────────────────────────────
+
 class ReportGenerator:
     def __init__(self, db: Database):
         self.db = db
@@ -76,28 +88,26 @@ class ReportGenerator:
         self.parser = NumberParser()
         self.chart_gen = ChartGenerator(db)
 
-    def format_rupiah(self, amount):
+    def fmt(self, amount):
         return self.parser.format_rupiah(amount)
 
-    # ──────────────────────────────────────────────
-    # TEXT REPORT (bulan tertentu atau default bulan ini)
-    # ──────────────────────────────────────────────
+    # ── TEXT REPORT ──────────────────────────────────────────
 
     def generate_text_report(self, user_id, start_date=None, end_date=None) -> str:
-        """Generate text report. Default: bulan berjalan."""
+        """Laporan teks bulan ini dengan saldo carry-over."""
         now = datetime.now(TIMEZONE)
         if start_date is None:
             start_date = now.replace(day=1).strftime("%Y-%m-%d")
         if end_date is None:
             end_date = now.strftime("%Y-%m-%d")
 
-        # Ambil label bulan dari start_date
         sd = datetime.strptime(start_date, "%Y-%m-%d")
         label = _month_label(sd.year, sd.month)
 
+        saldo_awal = _saldo_awal_bulan(user_id, self.db, sd.year, sd.month)
         total_income = self.db.get_total_by_type(user_id, 'income', start_date, end_date)
         total_expense = self.db.get_total_by_type(user_id, 'expense', start_date, end_date)
-        saldo = total_income - total_expense
+        saldo_akhir = saldo_awal + total_income - total_expense
 
         top_cats = self.db.get_spending_by_category(user_id, start_date, end_date)[:5]
         insights = self.calc.generate_insights(user_id)
@@ -107,55 +117,54 @@ class ReportGenerator:
                                                    start_date=start_date, end_date=end_date)
         notes = self.db.get_all_notes(user_id)
 
-        report = f"📊 *LAPORAN KEUANGAN — {label}*\n"
-        report += "═══════════════════════\n\n"
+        r = f"📊 *LAPORAN KEUANGAN — {label}*\n"
+        r += "═══════════════════════\n\n"
 
-        report += "*💰 RINGKASAN*\n"
-        report += f"Total Pemasukan: {self.format_rupiah(total_income)}\n"
-        report += f"Total Pengeluaran: {self.format_rupiah(total_expense)}\n"
-        report += "────────────────\n"
-        report += f"*Saldo: {self.format_rupiah(saldo)}*\n\n"
+        r += "*💰 RINGKASAN*\n"
+        r += f"🔄 Saldo Awal Bulan : {self.fmt(saldo_awal)}\n"
+        r += f"📥 Pemasukan        : {self.fmt(total_income)}\n"
+        r += f"📤 Pengeluaran      : {self.fmt(total_expense)}\n"
+        r += "────────────────\n"
+        r += f"*💵 Saldo Akhir     : {self.fmt(saldo_akhir)}*\n\n"
 
         if top_cats:
-            report += f"*📊 TOP PENGELUARAN {label.upper()}*\n"
+            r += f"*📊 TOP PENGELUARAN {label.upper()}*\n"
             for i, cat in enumerate(top_cats, 1):
                 pct = (cat['total'] / total_expense * 100) if total_expense > 0 else 0
-                report += f"{i}. {cat['category']}: {self.format_rupiah(cat['total'])} ({pct:.1f}%)\n"
-            report += "\n"
+                r += f"{i}. {cat['category']}: {self.fmt(cat['total'])} ({pct:.1f}%)\n"
+            r += "\n"
 
         if insights:
-            report += "*💡 INSIGHTS*\n"
-            for insight in insights:
-                report += f"• {insight}\n"
-            report += "\n"
+            r += "*💡 INSIGHTS*\n"
+            for ins in insights:
+                r += f"• {ins}\n"
+            r += "\n"
 
         if recent_income:
-            report += f"*💰 PEMASUKAN TERAKHIR — {label}*\n"
-            for trans in recent_income:
-                report += f"• {trans['date']}: {self.format_rupiah(trans['amount'])}\n"
-                report += f"  {trans['category']} - {trans['description'] or '-'}\n"
-            report += "\n"
+            r += f"*💰 PEMASUKAN TERAKHIR — {label}*\n"
+            for t in recent_income:
+                r += f"• {t['date']}: {self.fmt(t['amount'])}\n"
+                r += f"  {t['category']} - {t['description'] or '-'}\n"
+            r += "\n"
 
         if recent_expense:
-            report += f"*💸 PENGELUARAN TERAKHIR (10) — {label}*\n"
-            for trans in recent_expense:
-                report += f"• {trans['date']}: {self.format_rupiah(trans['amount'])}\n"
-                report += f"  {trans['category']} - {trans['description'] or '-'}\n"
-            report += "\n"
+            r += f"*💸 PENGELUARAN TERAKHIR (10) — {label}*\n"
+            for t in recent_expense:
+                r += f"• {t['date']}: {self.fmt(t['amount'])}\n"
+                r += f"  {t['category']} - {t['description'] or '-'}\n"
+            r += "\n"
 
         if notes:
-            report += "*📓 NOTES AKTIF*\n"
+            r += "*📓 NOTES AKTIF*\n"
             for i, note in enumerate(notes, 1):
-                report += f"{i}. {note['description']}\n"
-            report += "\n"
+                r += f"{i}. {note['description']}\n"
+            r += "\n"
 
-        report += "═══════════════════════\n"
-        report += f"_Generated: {datetime.now(TIMEZONE).strftime('%d %b %Y %H:%M')}_"
-        return report
+        r += "═══════════════════════\n"
+        r += f"_Generated: {datetime.now(TIMEZONE).strftime('%d %b %Y %H:%M')}_"
+        return r
 
-    # ──────────────────────────────────────────────
-    # PDF (semua data, dipisah per bulan)
-    # ──────────────────────────────────────────────
+    # ── PDF ──────────────────────────────────────────────────
 
     def generate_pdf(self, user_id, filename: str = None) -> str:
         if not filename:
@@ -163,87 +172,103 @@ class ReportGenerator:
             filename = f'laporan_keuangan_{ts}.pdf'
         filepath = os.path.join(EXPORT_DIR, filename)
 
-        doc = SimpleDocTemplate(filepath, pagesize=A4)
+        doc = SimpleDocTemplate(filepath, pagesize=A4,
+                                leftMargin=1.8*cm, rightMargin=1.8*cm,
+                                topMargin=2*cm, bottomMargin=2*cm)
         styles = getSampleStyleSheet()
+
+        # Custom styles
+        S = {
+            'title': ParagraphStyle('title', fontSize=18, fontName='Helvetica-Bold',
+                                     textColor=colors.HexColor('#2C3E50'),
+                                     alignment=TA_CENTER, spaceAfter=6),
+            'subtitle': ParagraphStyle('subtitle', fontSize=9,
+                                        textColor=colors.grey, alignment=TA_CENTER),
+            'h2': ParagraphStyle('h2', fontSize=12, fontName='Helvetica-Bold',
+                                  textColor=colors.HexColor('#2C3E50'),
+                                  spaceAfter=6, spaceBefore=10),
+            'month_banner': ParagraphStyle('mb', fontSize=14, fontName='Helvetica-Bold',
+                                            textColor=colors.white,
+                                            alignment=TA_CENTER),
+            'normal': styles['Normal'],
+        }
+
         story = []
 
-        title_style = ParagraphStyle(
-            'Title', parent=styles['Heading1'],
-            fontSize=18, textColor=colors.HexColor('#2C3E50'),
-            spaceAfter=20, alignment=TA_CENTER
-        )
-        h2_style = ParagraphStyle(
-            'H2', parent=styles['Heading2'],
-            fontSize=13, textColor=colors.HexColor('#2C3E50'), spaceAfter=8
-        )
-        month_style = ParagraphStyle(
-            'Month', parent=styles['Heading1'],
-            fontSize=15, textColor=colors.white,
-            spaceAfter=8, spaceBefore=16, alignment=TA_CENTER
-        )
-
-        story.append(Paragraph("LAPORAN KEUANGAN PERSONAL", title_style))
+        # ── Cover ──
+        story.append(Paragraph("LAPORAN KEUANGAN PERSONAL", S['title']))
         story.append(Paragraph(
             f"Generated: {datetime.now(TIMEZONE).strftime('%d %B %Y %H:%M')}",
-            ParagraphStyle('gen', fontSize=9, textColor=colors.grey, alignment=TA_CENTER)
+            S['subtitle']
         ))
-        story.append(Spacer(1, 12))
+        story.append(Spacer(1, 10))
 
         months = _get_all_months(user_id, self.db)
         if not months:
-            story.append(Paragraph("Belum ada data transaksi.", styles['Normal']))
+            story.append(Paragraph("Belum ada data transaksi.", S['normal']))
             doc.build(story)
             return filepath
 
-        # ── Overall summary ──
-        all_income = self.db.get_total_by_type(user_id, 'income')
-        all_expense = self.db.get_total_by_type(user_id, 'expense')
-        all_saldo = all_income - all_expense
+        # ── Ringkasan Keseluruhan ──
+        story.append(Paragraph("RINGKASAN KESELURUHAN", S['h2']))
+        all_inc = self.db.get_total_by_type(user_id, 'income')
+        all_exp = self.db.get_total_by_type(user_id, 'expense')
+        all_sal = all_inc - all_exp
 
-        story.append(Paragraph("RINGKASAN KESELURUHAN", h2_style))
-        overall_data = [
-            ['Keterangan', 'Jumlah'],
-            ['Total Pemasukan', self.format_rupiah(all_income)],
-            ['Total Pengeluaran', self.format_rupiah(all_expense)],
-            ['SALDO AKHIR', self.format_rupiah(all_saldo)],
+        overall_rows = [
+            ['Bulan', 'Saldo Awal', 'Pemasukan', 'Pengeluaran', 'Saldo Akhir'],
         ]
-        ot = Table(overall_data, colWidths=[10*cm, 6*cm])
+        for y, m in months:
+            s_date, e_date = _month_range(y, m)
+            lbl = _month_label(y, m)
+            s_awal = _saldo_awal_bulan(user_id, self.db, y, m)
+            inc = self.db.get_total_by_type(user_id, 'income', s_date, e_date)
+            exp = self.db.get_total_by_type(user_id, 'expense', s_date, e_date)
+            sal = s_awal + inc - exp
+            overall_rows.append([lbl, self.fmt(s_awal), self.fmt(inc),
+                                  self.fmt(exp), self.fmt(sal)])
+        overall_rows.append(['SALDO SAAT INI', '', self.fmt(all_inc),
+                              self.fmt(all_exp), self.fmt(all_sal)])
+
+        ot = Table(overall_rows, colWidths=[3.8*cm, 3.2*cm, 3.2*cm, 3.2*cm, 3.2*cm])
         ot.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2C3E50')),
             ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-            ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,-1), 10),
-            ('BACKGROUND', (0,3), (-1,3), colors.HexColor('#3498DB')),
-            ('TEXTCOLOR', (0,3), (-1,3), colors.white),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-            ('TOPPADDING', (0,0), (-1,-1), 7),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 7),
-            ('LEFTPADDING', (0,0), (-1,-1), 10),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 8.5),
+            ('GRID', (0,0), (-1,-1), 0.4, colors.grey),
+            ('TOPPADDING', (0,0), (-1,-1), 6),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+            ('LEFTPADDING', (0,0), (-1,-1), 6),
+            ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.HexColor('#EBF5FB'), colors.white]),
+            ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#D6EAF8')),
+            ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
         ]))
         story.append(ot)
-        story.append(Spacer(1, 16))
+        story.append(Spacer(1, 10))
 
-        # ── Notes ──
+        # ── Notes global (tampil sekali di awal) ──
         notes = self.db.get_all_notes(user_id)
         if notes:
-            story.append(Paragraph("CATATAN (NOTES)", h2_style))
-            notes_data = [['No', 'Catatan']]
+            story.append(Paragraph("CATATAN (NOTES)", S['h2']))
+            notes_data = [['No', 'Catatan', 'Waktu']]
             for i, note in enumerate(notes, 1):
-                notes_data.append([str(i), note['description']])
-            nt = Table(notes_data, colWidths=[1.5*cm, 14.5*cm])
+                notes_data.append([str(i), note['description'],
+                                    str(note['created_at'])[:16]])
+            nt = Table(notes_data, colWidths=[1*cm, 13*cm, 3.6*cm])
             nt.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F39C12')),
                 ('TEXTCOLOR', (0,0), (-1,0), colors.white),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0,0), (-1,-1), 9),
-                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('TOPPADDING', (0,0), (-1,-1), 6),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-                ('LEFTPADDING', (0,0), (-1,-1), 8),
-                ('BACKGROUND', (0,1), (-1,-1), colors.lightgoldenrodyellow),
+                ('FONTSIZE', (0,0), (-1,-1), 8.5),
+                ('GRID', (0,0), (-1,-1), 0.4, colors.grey),
+                ('TOPPADDING', (0,0), (-1,-1), 5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+                ('LEFTPADDING', (0,0), (-1,-1), 6),
+                ('ROWBACKGROUNDS', (0,1), (-1,-1),
+                 [colors.lightgoldenrodyellow, colors.white]),
             ]))
             story.append(nt)
-            story.append(Spacer(1, 12))
 
         story.append(PageBreak())
 
@@ -252,56 +277,65 @@ class ReportGenerator:
             start_date, end_date = _month_range(year, month)
             label = _month_label(year, month)
 
-            inc_transactions = self.db.get_transactions(user_id, 'income',
-                                                         start_date=start_date, end_date=end_date)
-            exp_transactions = self.db.get_transactions(user_id, 'expense',
-                                                         start_date=start_date, end_date=end_date)
+            saldo_awal = _saldo_awal_bulan(user_id, self.db, year, month)
+            inc_txs = self.db.get_transactions(user_id, 'income',
+                                               start_date=start_date, end_date=end_date)
+            exp_txs = self.db.get_transactions(user_id, 'expense',
+                                               start_date=start_date, end_date=end_date)
             total_inc = self.db.get_total_by_type(user_id, 'income', start_date, end_date)
             total_exp = self.db.get_total_by_type(user_id, 'expense', start_date, end_date)
-            saldo = total_inc - total_exp
+            saldo_akhir = saldo_awal + total_inc - total_exp
 
-            # Month header banner
-            month_banner_data = [[Paragraph(f"📅  {label.upper()}", month_style)]]
-            mb = Table(month_banner_data, colWidths=[16*cm])
-            mb.setStyle(TableStyle([
+            # Month banner
+            banner = Table(
+                [[Paragraph(f"📅  {label.upper()}", S['month_banner'])]],
+                colWidths=[16.2*cm]
+            )
+            banner.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#2C3E50')),
-                ('TOPPADDING', (0,0), (-1,-1), 8),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+                ('TOPPADDING', (0,0), (-1,-1), 10),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 10),
             ]))
-            story.append(mb)
-            story.append(Spacer(1, 10))
+            story.append(banner)
+            story.append(Spacer(1, 8))
 
-            # Summary bulan
+            # Summary bulan — saldo awal → pemasukan → pengeluaran → saldo akhir
             sum_data = [
-                ['Pemasukan', self.format_rupiah(total_inc)],
-                ['Pengeluaran', self.format_rupiah(total_exp)],
-                ['Saldo', self.format_rupiah(saldo)],
+                ['Keterangan', 'Jumlah'],
+                ['🔄 Saldo Awal Bulan', self.fmt(saldo_awal)],
+                ['📥 Pemasukan', self.fmt(total_inc)],
+                ['📤 Pengeluaran', self.fmt(total_exp)],
+                ['💵 Saldo Akhir', self.fmt(saldo_akhir)],
             ]
             st = Table(sum_data, colWidths=[8*cm, 8*cm])
             st.setStyle(TableStyle([
-                ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#5D6D7E')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0,0), (-1,-1), 10),
-                ('TEXTCOLOR', (0,0), (0,-1), colors.HexColor('#2C3E50')),
                 ('GRID', (0,0), (-1,-1), 0.4, colors.lightgrey),
-                ('TOPPADDING', (0,0), (-1,-1), 6),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+                ('TOPPADDING', (0,0), (-1,-1), 7),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 7),
                 ('LEFTPADDING', (0,0), (-1,-1), 10),
-                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#EBF5FB')),
-                ('BACKGROUND', (0,2), (-1,2), colors.HexColor('#D6EAF8')),
+                ('ROWBACKGROUNDS', (0,1), (-1,-2),
+                 [colors.HexColor('#EBF5FB'), colors.white,
+                  colors.HexColor('#FDEDEC'), colors.white]),
+                ('BACKGROUND', (0,4), (-1,4), colors.HexColor('#D6EAF8')),
+                ('FONTNAME', (0,4), (-1,4), 'Helvetica-Bold'),
             ]))
             story.append(st)
             story.append(Spacer(1, 10))
 
-            # Tabel pemasukan bulan ini
-            if inc_transactions:
-                story.append(Paragraph(f"Pemasukan — {label}", h2_style))
+            # Tabel Pemasukan
+            if inc_txs:
+                story.append(Paragraph(f"Pemasukan — {label}", S['h2']))
                 inc_data = [['Tanggal', 'Kategori', 'Keterangan', 'Jumlah']]
-                for t in inc_transactions:
+                for t in inc_txs:
                     inc_data.append([t['date'], t['category'],
-                                     t['description'] or '-', self.format_rupiah(t['amount'])])
-                inc_data.append(['', '', 'TOTAL', self.format_rupiah(total_inc)])
+                                     t['description'] or '-', self.fmt(t['amount'])])
+                inc_data.append(['', '', 'TOTAL PEMASUKAN', self.fmt(total_inc)])
 
-                it = Table(inc_data, colWidths=[3*cm, 4*cm, 6*cm, 3.5*cm])
+                it = Table(inc_data, colWidths=[2.8*cm, 3.8*cm, 6.2*cm, 3.4*cm])
                 it.setStyle(TableStyle([
                     ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#27AE60')),
                     ('TEXTCOLOR', (0,0), (-1,0), colors.white),
@@ -311,23 +345,24 @@ class ReportGenerator:
                     ('TOPPADDING', (0,0), (-1,-1), 5),
                     ('BOTTOMPADDING', (0,0), (-1,-1), 5),
                     ('LEFTPADDING', (0,0), (-1,-1), 6),
-                    ('BACKGROUND', (0,1), (-1,-2), colors.HexColor('#E8F8F5')),
+                    ('ROWBACKGROUNDS', (0,1), (-1,-2),
+                     [colors.HexColor('#EAFAF1'), colors.white]),
                     ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#D5F4E6')),
                     ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
                 ]))
                 story.append(it)
                 story.append(Spacer(1, 8))
 
-            # Tabel pengeluaran bulan ini
-            if exp_transactions:
-                story.append(Paragraph(f"Pengeluaran — {label}", h2_style))
+            # Tabel Pengeluaran
+            if exp_txs:
+                story.append(Paragraph(f"Pengeluaran — {label}", S['h2']))
                 exp_data = [['Tanggal', 'Kategori', 'Keterangan', 'Jumlah']]
-                for t in exp_transactions:
+                for t in exp_txs:
                     exp_data.append([t['date'], t['category'],
-                                     t['description'] or '-', self.format_rupiah(t['amount'])])
-                exp_data.append(['', '', 'TOTAL', self.format_rupiah(total_exp)])
+                                     t['description'] or '-', self.fmt(t['amount'])])
+                exp_data.append(['', '', 'TOTAL PENGELUARAN', self.fmt(total_exp)])
 
-                et = Table(exp_data, colWidths=[3*cm, 4*cm, 6*cm, 3.5*cm])
+                et = Table(exp_data, colWidths=[2.8*cm, 3.8*cm, 6.2*cm, 3.4*cm])
                 et.setStyle(TableStyle([
                     ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#E74C3C')),
                     ('TEXTCOLOR', (0,0), (-1,0), colors.white),
@@ -337,21 +372,50 @@ class ReportGenerator:
                     ('TOPPADDING', (0,0), (-1,-1), 5),
                     ('BOTTOMPADDING', (0,0), (-1,-1), 5),
                     ('LEFTPADDING', (0,0), (-1,-1), 6),
-                    ('BACKGROUND', (0,1), (-1,-2), colors.HexColor('#FDEDEC')),
+                    ('ROWBACKGROUNDS', (0,1), (-1,-2),
+                     [colors.HexColor('#FDEDEC'), colors.white]),
                     ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#FADBD8')),
                     ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
                 ]))
                 story.append(et)
                 story.append(Spacer(1, 8))
 
+            # Grafik per bulan
+            try:
+                try:
+                    pie_file = self.chart_gen.generate_expense_pie_chart(
+                        filename=f"pie_exp_{year}{month:02d}.png"
+                    )
+                except TypeError:
+                    pie_file = self.chart_gen.generate_expense_pie_chart()
+                if pie_file and os.path.exists(pie_file):
+                    story.append(Paragraph(
+                        f"Distribusi Pengeluaran — {label}", S['h2']))
+                    story.append(Image(pie_file, width=14*cm, height=10*cm))
+                    story.append(Spacer(1, 8))
+            except Exception as e:
+                print(f"Pie chart error: {e}")
+
+            try:
+                try:
+                    trend_file = self.chart_gen.generate_trend_chart(
+                        filename=f"trend_{year}{month:02d}.png"
+                    )
+                except TypeError:
+                    trend_file = self.chart_gen.generate_trend_chart()
+                if trend_file and os.path.exists(trend_file):
+                    story.append(Paragraph(
+                        f"Trend Pengeluaran Harian — {label}", S['h2']))
+                    story.append(Image(trend_file, width=14*cm, height=8*cm))
+            except Exception as e:
+                print(f"Trend chart error: {e}")
+
             story.append(PageBreak())
 
         doc.build(story)
         return filepath
 
-    # ──────────────────────────────────────────────
-    # EXCEL (semua data, sheet per bulan)
-    # ──────────────────────────────────────────────
+    # ── EXCEL ─────────────────────────────────────────────────
 
     def generate_excel(self, user_id, filename: str = None) -> str:
         if not filename:
@@ -363,178 +427,153 @@ class ReportGenerator:
         wb.remove(wb.active)
 
         months = _get_all_months(user_id, self.db)
-
-        # ── Sheet Ringkasan Keseluruhan ──
-        self._create_overall_sheet(wb, user_id)
-
-        # ── Sheet per bulan ──
-        for year, month in months:
-            start_date, end_date = _month_range(year, month)
-            label = _month_label(year, month)
-            self._create_month_sheet(wb, user_id, year, month,
-                                     start_date, end_date, label)
-
-        # ── Sheet Notes ──
-        self._create_notes_sheet(wb, user_id)
+        self._excel_ringkasan(wb, user_id, months)
+        for y, m in months:
+            s_date, e_date = _month_range(y, m)
+            self._excel_month_sheet(wb, user_id, y, m, s_date, e_date)
+        self._excel_notes(wb, user_id)
 
         wb.save(filepath)
         return filepath
 
-    def _create_overall_sheet(self, wb, user_id):
-        ws = wb.create_sheet('Ringkasan Keseluruhan')
-
+    def _excel_ringkasan(self, wb, user_id, months):
+        ws = wb.create_sheet('Ringkasan')
         ws['A1'] = 'RINGKASAN KESELURUHAN'
         ws['A1'].font = Font(size=14, bold=True)
-        ws.merge_cells('A1:B1')
+        ws.merge_cells('A1:E1')
 
-        all_income = self.db.get_total_by_type(user_id, 'income')
-        all_expense = self.db.get_total_by_type(user_id, 'expense')
-        all_saldo = all_income - all_expense
+        hdrs = ['Bulan', 'Saldo Awal', 'Pemasukan', 'Pengeluaran', 'Saldo Akhir']
+        for c, h in enumerate(hdrs, 1):
+            cell = ws.cell(3, c, h)
+            cell.fill = PatternFill(start_color='2C3E50', end_color='2C3E50', fill_type='solid')
+            cell.font = Font(color='FFFFFF', bold=True)
+            cell.alignment = Alignment(horizontal='center')
 
-        months = _get_all_months(user_id, self.db)
-
-        # Header tabel per bulan
-        headers = ['Bulan', 'Pemasukan', 'Pengeluaran', 'Saldo']
-        for col, h in enumerate(headers, 1):
-            c = ws.cell(3, col, h)
-            c.fill = PatternFill(start_color='2C3E50', end_color='2C3E50', fill_type='solid')
-            c.font = Font(color='FFFFFF', bold=True)
-            c.alignment = Alignment(horizontal='center')
+        all_inc = self.db.get_total_by_type(user_id, 'income')
+        all_exp = self.db.get_total_by_type(user_id, 'expense')
 
         row = 4
-        for year, month in months:
-            start_date, end_date = _month_range(year, month)
-            label = _month_label(year, month)
-            inc = self.db.get_total_by_type(user_id, 'income', start_date, end_date)
-            exp = self.db.get_total_by_type(user_id, 'expense', start_date, end_date)
-            sal = inc - exp
-            ws.cell(row, 1, label)
-            ws.cell(row, 2, inc).number_format = '#,##0'
-            ws.cell(row, 3, exp).number_format = '#,##0'
-            ws.cell(row, 4, sal).number_format = '#,##0'
+        for y, m in months:
+            s, e = _month_range(y, m)
+            sa = _saldo_awal_bulan(user_id, self.db, y, m)
+            inc = self.db.get_total_by_type(user_id, 'income', s, e)
+            exp = self.db.get_total_by_type(user_id, 'expense', s, e)
+            sal = sa + inc - exp
+            ws.cell(row, 1, _month_label(y, m))
+            for c, v in [(2, sa), (3, inc), (4, exp), (5, sal)]:
+                ws.cell(row, c, v).number_format = '#,##0'
             row += 1
 
-        # Total row
         ws.cell(row, 1, 'TOTAL').font = Font(bold=True)
-        for col, val in [(2, all_income), (3, all_expense), (4, all_saldo)]:
-            c = ws.cell(row, col, val)
-            c.number_format = '#,##0'
-            c.font = Font(bold=True)
-            c.fill = PatternFill(start_color='3498DB', end_color='3498DB', fill_type='solid')
-            c.font = Font(color='FFFFFF', bold=True)
+        for c, v in [(3, all_inc), (4, all_exp), (5, all_inc - all_exp)]:
+            cell = ws.cell(row, c, v)
+            cell.number_format = '#,##0'
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill(start_color='3498DB', end_color='3498DB', fill_type='solid')
+            cell.font = Font(color='FFFFFF', bold=True)
 
-        ws.column_dimensions['A'].width = 20
-        ws.column_dimensions['B'].width = 18
-        ws.column_dimensions['C'].width = 18
-        ws.column_dimensions['D'].width = 18
+        for col, w in zip('ABCDE', [20, 18, 18, 18, 18]):
+            ws.column_dimensions[col].width = w
 
-    def _create_month_sheet(self, wb, user_id, year, month,
-                             start_date, end_date, label):
-        # Sheet name max 31 chars
-        sheet_name = label[:31]
-        ws = wb.create_sheet(sheet_name)
+    def _excel_month_sheet(self, wb, user_id, year, month, s_date, e_date):
+        label = _month_label(year, month)
+        ws = wb.create_sheet(label[:31])
 
-        inc_transactions = self.db.get_transactions(user_id, 'income',
-                                                     start_date=start_date, end_date=end_date)
-        exp_transactions = self.db.get_transactions(user_id, 'expense',
-                                                     start_date=start_date, end_date=end_date)
-        total_inc = self.db.get_total_by_type(user_id, 'income', start_date, end_date)
-        total_exp = self.db.get_total_by_type(user_id, 'expense', start_date, end_date)
+        saldo_awal = _saldo_awal_bulan(user_id, self.db, year, month)
+        inc_txs = self.db.get_transactions(user_id, 'income',
+                                           start_date=s_date, end_date=e_date)
+        exp_txs = self.db.get_transactions(user_id, 'expense',
+                                           start_date=s_date, end_date=e_date)
+        total_inc = self.db.get_total_by_type(user_id, 'income', s_date, e_date)
+        total_exp = self.db.get_total_by_type(user_id, 'expense', s_date, e_date)
+        saldo_akhir = saldo_awal + total_inc - total_exp
 
-        current_row = 1
-
-        # Title
-        ws.cell(current_row, 1, f'LAPORAN {label.upper()}')
-        ws.cell(current_row, 1).font = Font(size=13, bold=True)
-        ws.merge_cells(f'A{current_row}:D{current_row}')
-        current_row += 2
+        r = 1
+        ws.cell(r, 1, f'LAPORAN {label.upper()}').font = Font(size=13, bold=True)
+        ws.merge_cells(f'A{r}:D{r}')
+        r += 2
 
         # Summary
-        for label_txt, val in [
-            ('Total Pemasukan', total_inc),
-            ('Total Pengeluaran', total_exp),
-            ('Saldo', total_inc - total_exp)
+        for lbl, val, color in [
+            ('🔄 Saldo Awal Bulan', saldo_awal, None),
+            ('📥 Pemasukan', total_inc, '27AE60'),
+            ('📤 Pengeluaran', total_exp, 'E74C3C'),
+            ('💵 Saldo Akhir', saldo_akhir, '3498DB'),
         ]:
-            ws.cell(current_row, 1, label_txt).font = Font(bold=True)
-            c = ws.cell(current_row, 2, val)
+            ws.cell(r, 1, lbl).font = Font(bold=True)
+            c = ws.cell(r, 2, val)
             c.number_format = '#,##0'
-            current_row += 1
-        current_row += 1
+            if color:
+                c.fill = PatternFill(start_color=color, end_color=color, fill_type='solid')
+                c.font = Font(color='FFFFFF', bold=True)
+            r += 1
+        r += 1
 
         # Pemasukan
-        ws.cell(current_row, 1, 'PEMASUKAN')
-        ws.cell(current_row, 1).font = Font(size=11, bold=True)
-        ws.merge_cells(f'A{current_row}:D{current_row}')
-        current_row += 1
-
-        headers = ['Tanggal', 'Kategori', 'Keterangan', 'Jumlah']
-        for col, h in enumerate(headers, 1):
-            c = ws.cell(current_row, col, h)
-            c.fill = PatternFill(start_color='27AE60', end_color='27AE60', fill_type='solid')
-            c.font = Font(color='FFFFFF', bold=True)
-            c.alignment = Alignment(horizontal='center')
-        current_row += 1
-
-        for t in inc_transactions:
-            ws.cell(current_row, 1, t['date'])
-            ws.cell(current_row, 2, t['category'])
-            ws.cell(current_row, 3, t['description'] or '-')
-            ws.cell(current_row, 4, t['amount']).number_format = '#,##0'
-            current_row += 1
-
-        ws.cell(current_row, 3, 'TOTAL').font = Font(bold=True)
-        c = ws.cell(current_row, 4, total_inc)
-        c.number_format = '#,##0'
-        c.font = Font(bold=True)
-        c.fill = PatternFill(start_color='D5F4E6', end_color='D5F4E6', fill_type='solid')
-        current_row += 2
+        if inc_txs:
+            ws.cell(r, 1, 'PEMASUKAN').font = Font(size=11, bold=True)
+            ws.merge_cells(f'A{r}:D{r}')
+            r += 1
+            for c_idx, h in enumerate(['Tanggal', 'Kategori', 'Keterangan', 'Jumlah'], 1):
+                cell = ws.cell(r, c_idx, h)
+                cell.fill = PatternFill(start_color='27AE60', end_color='27AE60', fill_type='solid')
+                cell.font = Font(color='FFFFFF', bold=True)
+            r += 1
+            for t in inc_txs:
+                ws.cell(r, 1, t['date'])
+                ws.cell(r, 2, t['category'])
+                ws.cell(r, 3, t['description'] or '-')
+                ws.cell(r, 4, t['amount']).number_format = '#,##0'
+                r += 1
+            ws.cell(r, 3, 'TOTAL').font = Font(bold=True)
+            c = ws.cell(r, 4, total_inc)
+            c.number_format = '#,##0'
+            c.font = Font(bold=True)
+            c.fill = PatternFill(start_color='D5F4E6', end_color='D5F4E6', fill_type='solid')
+            r += 2
 
         # Pengeluaran
-        ws.cell(current_row, 1, 'PENGELUARAN')
-        ws.cell(current_row, 1).font = Font(size=11, bold=True)
-        ws.merge_cells(f'A{current_row}:D{current_row}')
-        current_row += 1
+        if exp_txs:
+            ws.cell(r, 1, 'PENGELUARAN').font = Font(size=11, bold=True)
+            ws.merge_cells(f'A{r}:D{r}')
+            r += 1
+            for c_idx, h in enumerate(['Tanggal', 'Kategori', 'Keterangan', 'Jumlah'], 1):
+                cell = ws.cell(r, c_idx, h)
+                cell.fill = PatternFill(start_color='E74C3C', end_color='E74C3C', fill_type='solid')
+                cell.font = Font(color='FFFFFF', bold=True)
+            r += 1
+            for t in exp_txs:
+                ws.cell(r, 1, t['date'])
+                ws.cell(r, 2, t['category'])
+                ws.cell(r, 3, t['description'] or '-')
+                ws.cell(r, 4, t['amount']).number_format = '#,##0'
+                r += 1
+            ws.cell(r, 3, 'TOTAL').font = Font(bold=True)
+            c = ws.cell(r, 4, total_exp)
+            c.number_format = '#,##0'
+            c.font = Font(bold=True)
+            c.fill = PatternFill(start_color='FADBD8', end_color='FADBD8', fill_type='solid')
 
-        for col, h in enumerate(headers, 1):
-            c = ws.cell(current_row, col, h)
-            c.fill = PatternFill(start_color='E74C3C', end_color='E74C3C', fill_type='solid')
-            c.font = Font(color='FFFFFF', bold=True)
-            c.alignment = Alignment(horizontal='center')
-        current_row += 1
+        for col, w in zip('ABCD', [12, 20, 35, 15]):
+            ws.column_dimensions[col].width = w
 
-        for t in exp_transactions:
-            ws.cell(current_row, 1, t['date'])
-            ws.cell(current_row, 2, t['category'])
-            ws.cell(current_row, 3, t['description'] or '-')
-            ws.cell(current_row, 4, t['amount']).number_format = '#,##0'
-            current_row += 1
-
-        ws.cell(current_row, 3, 'TOTAL').font = Font(bold=True)
-        c = ws.cell(current_row, 4, total_exp)
-        c.number_format = '#,##0'
-        c.font = Font(bold=True)
-        c.fill = PatternFill(start_color='FADBD8', end_color='FADBD8', fill_type='solid')
-
-        ws.column_dimensions['A'].width = 12
-        ws.column_dimensions['B'].width = 20
-        ws.column_dimensions['C'].width = 35
-        ws.column_dimensions['D'].width = 15
-
-    def _create_notes_sheet(self, wb, user_id):
+    def _excel_notes(self, wb, user_id):
         ws = wb.create_sheet('Catatan')
         ws['A1'] = 'DAFTAR CATATAN'
         ws['A1'].font = Font(size=13, bold=True)
-        ws.merge_cells('A1:B1')
+        ws.merge_cells('A1:C1')
 
-        for col, h in enumerate(['No', 'Catatan'], 1):
-            c = ws.cell(3, col, h)
-            c.fill = PatternFill(start_color='F39C12', end_color='F39C12', fill_type='solid')
-            c.font = Font(color='FFFFFF', bold=True)
+        for c_idx, h in enumerate(['No', 'Catatan', 'Waktu'], 1):
+            cell = ws.cell(3, c_idx, h)
+            cell.fill = PatternFill(start_color='F39C12', end_color='F39C12', fill_type='solid')
+            cell.font = Font(color='FFFFFF', bold=True)
 
         notes = self.db.get_all_notes(user_id)
         for row, note in enumerate(notes, 4):
             ws.cell(row, 1, row - 3)
             ws.cell(row, 2, note['description'])
+            ws.cell(row, 3, str(note['created_at'])[:16])
 
         ws.column_dimensions['A'].width = 6
         ws.column_dimensions['B'].width = 60
+        ws.column_dimensions['C'].width = 18
