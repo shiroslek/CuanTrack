@@ -135,9 +135,9 @@ class ReportGenerator:
             r += "\n"
 
         if insights:
-            r += "*💡 INSIGHTS*\n"
-            for ins in insights:
-                r += f"• {ins}\n"
+            r += f"*💡 INSIGHT — {label}*\n"
+            for i, ins in enumerate(insights, 1):
+                r += f"{i}. {ins}\n"
             r += "\n"
 
         if recent_income:
