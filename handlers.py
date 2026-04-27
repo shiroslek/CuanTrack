@@ -416,8 +416,8 @@ async def show_laporan(query, user_id):
 
     # Grafik bulan ini
     for gen_fn, caption in [
-        (chart_gen.generate_expense_pie_chart, f"📊 Distribusi Pengeluaran — {month_label}"),
-        (chart_gen.generate_trend_chart, f"📈 Trend Pengeluaran — {month_label}"),
+        (chart_gen.generate_expense_pie_chart, "📊 Distribusi Pengeluaran per Kategori"),
+        (chart_gen.generate_trend_chart, "📈 Trend Pengeluaran Harian (30 Hari Terakhir)"),
     ]:
         try:
             try:

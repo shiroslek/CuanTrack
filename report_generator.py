@@ -390,7 +390,7 @@ class ReportGenerator:
                     pie_file = self.chart_gen.generate_expense_pie_chart()
                 if pie_file and os.path.exists(pie_file):
                     story.append(Paragraph(
-                        f"Distribusi Pengeluaran — {label}", S['h2']))
+                        "Distribusi Pengeluaran per Kategori", S['h2']))
                     story.append(Image(pie_file, width=14*cm, height=10*cm))
                     story.append(Spacer(1, 8))
             except Exception as e:
@@ -405,7 +405,7 @@ class ReportGenerator:
                     trend_file = self.chart_gen.generate_trend_chart()
                 if trend_file and os.path.exists(trend_file):
                     story.append(Paragraph(
-                        f"Trend Pengeluaran Harian — {label}", S['h2']))
+                        "Trend Pengeluaran Harian (30 Hari Terakhir)", S['h2']))
                     story.append(Image(trend_file, width=14*cm, height=8*cm))
             except Exception as e:
                 print(f"Trend chart error: {e}")
