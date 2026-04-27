@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 Cuan Track Bot - Command Handlers
-v2.6 - Fixed multi-user signatures (database.py v2.2)
+v2.7 - Monthly filter untuk saldo/ringkasan/laporan
 """
 
 import logging
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 import calendar
@@ -49,6 +49,15 @@ def get_today():
 def get_now_time():
     return datetime.now(TIMEZONE).strftime("%H:%M:%S")
 
+def get_month_start():
+    """Tanggal 1 bulan ini."""
+    now = datetime.now(TIMEZONE)
+    return now.replace(day=1).strftime("%Y-%m-%d")
+
+def get_month_label():
+    """Nama bulan + tahun, misal: April 2026."""
+    return datetime.now(TIMEZONE).strftime("%B %Y")
+
 def get_home_button():
     return InlineKeyboardButton("🏠 Dashboard", callback_data="back_to_main")
 
@@ -82,8 +91,17 @@ def get_main_menu_keyboard():
     ])
 
 
+def get_persistent_keyboard():
+    """Keyboard permanen yang selalu muncul di area input — tap kapan saja untuk buka Dashboard."""
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("🏠 Dashboard")]],
+        resize_keyboard=True,
+        persistent=True,
+        is_persistent=True
+    )
+
+
 async def safe_edit(query, text, reply_markup=None, parse_mode='Markdown'):
-    """Edit pesan; fallback kirim baru jika gagal."""
     try:
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except Exception:
@@ -111,15 +129,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     try:
-        # set_setting(user_id, key, value)
         db.set_setting(user_id, 'first_seen', datetime.now(TIMEZONE).strftime("%Y-%m-%d"))
     except Exception as e:
         logger.warning(f"set_setting failed: {e}")
 
     await update.message.reply_text(
-        f"🎉 *Selamat Datang di {BOT_NAME}!*\n\nHalo {user.first_name}! 👋\n\nSilakan pilih menu di bawah:",
-        reply_markup=get_main_menu_keyboard(),
+        f"🎉 *Selamat Datang di {BOT_NAME}!*\n\nHalo {user.first_name}! 👋\n\n"
+        "Tombol *🏠 Dashboard* sudah muncul di keyboard kamu — tap kapan saja!",
+        reply_markup=get_persistent_keyboard(),
         parse_mode='Markdown'
+    )
+    await update.message.reply_text(
+        "Pilih menu:",
+        reply_markup=get_main_menu_keyboard()
     )
 
 
@@ -130,13 +152,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1. Pilih kategori\n"
         "2. Masukkan keterangan\n"
         "3. Masukkan nominal: 50.000 atau 1.500.000\n\n"
-        "*📊 Laporan:* Laporan lengkap + grafik\n"
-        "*💳 Saldo:* Cek saldo saat ini\n"
-        "*📝 Ringkasan:* Summary harian\n"
+        "*📊 Laporan:* Ringkasan bulan ini + export PDF/Excel\n"
+        "*💳 Saldo:* Saldo bulan ini\n"
+        "*📝 Ringkasan:* Summary bulan ini\n"
         "*📓 Notes:* Catatan penting\n"
         "*✏️ Edit Transaksi:* Koreksi transaksi lama\n"
         "*⚙️ Settings:* Kelola kategori\n\n"
-        "Ketuk 🏠 Dashboard untuk kembali ke menu kapan saja.",
+        "💡 Saldo & Ringkasan menampilkan data bulan berjalan.\n"
+        "📄 PDF & Excel menampilkan semua data dipisah per bulan.\n\n"
+        "Ketuk 🏠 Dashboard kapan saja untuk kembali ke menu.",
         parse_mode='Markdown'
     )
 
@@ -144,9 +168,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== INCOME / EXPENSE ====================
 
 async def show_category_grid(query, user_id, trans_type: str):
-    # get_categories(trans_type) — kategori global, tidak perlu user_id
     categories = db.get_categories(trans_type)
-
     if not categories:
         await safe_edit(query, f"❌ Belum ada kategori {trans_type}. Tambahkan di Settings.",
                         reply_markup=InlineKeyboardMarkup([[get_home_button()]]))
@@ -179,7 +201,6 @@ async def handle_category_selected(query, context, user_id, trans_type: str, cat
         'step': 'waiting_description',
         'user_id': user_id
     }
-    # get_category_by_name(name) — tidak perlu user_id
     cat_info = db.get_category_by_name(category)
     icon = cat_info['icon'] if cat_info else "📌"
     example = INCOME_EXAMPLE_TEXT if trans_type == 'income' else EXPENSE_EXAMPLE_TEXT
@@ -190,10 +211,21 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     text = update.message.text.strip()
     user_id = update.effective_user.id
 
+    # Tap tombol keyboard permanen → tampilkan menu utama
+    if text in ("🏠 Dashboard", "/start"):
+        user = update.effective_user
+        await update.message.reply_text(
+            f"🏠 *Dashboard — {BOT_NAME}*\n\nPilih menu:",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode='Markdown'
+        )
+        return
+
     if 'pending_transaction' not in context.user_data:
         await update.message.reply_text(
-            "Gunakan /start atau ketuk 🏠 Dashboard untuk membuka menu.",
-            reply_markup=InlineKeyboardMarkup([[get_home_button()]])
+            "Ketuk tombol *🏠 Dashboard* di keyboard untuk membuka menu.",
+            reply_markup=get_persistent_keyboard(),
+            parse_mode='Markdown'
         )
         return
 
@@ -217,12 +249,16 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         amount = parser.parse_amount(text)
-        # add_transaction(user_id, date, time, trans_type, category, amount, description)
         db.add_transaction(uid, get_today(), get_now_time(),
                            pending['type'], pending['category'],
                            amount, pending['description'])
-        # get_saldo_info(user_id)
-        saldo_info = calc.get_saldo_info(uid)
+
+        # Saldo bulan ini
+        month_start = get_month_start()
+        today = get_today()
+        income_month = db.get_total_by_type(uid, 'income', month_start, today)
+        expense_month = db.get_total_by_type(uid, 'expense', month_start, today)
+        saldo_month = income_month - expense_month
 
         trans_name = "Pemasukan" if pending['type'] == 'income' else "Pengeluaran"
         icon = "💰" if pending['type'] == 'income' else "💸"
@@ -234,7 +270,7 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
             f"{icon} {format_rupiah(amount)}\n"
             f"📂 {pending['category']}\n"
             f"📝 {pending['description']}\n\n"
-            f"💳 Saldo: *{format_rupiah(saldo_info['saldo'])}*",
+            f"💳 Saldo {get_month_label()}: *{format_rupiah(saldo_month)}*",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("« Catat Lagi", callback_data=menu_back)],
                 [get_home_button()]
@@ -243,7 +279,6 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     elif step == 'waiting_note':
-        # add_note(user_id, description)
         db.add_note(uid, text)
         del context.user_data['pending_transaction']
         await update.message.reply_text(
@@ -262,7 +297,6 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
         await show_emoji_selection(update, context)
 
     elif step == 'waiting_edit_description':
-        # update_transaction(trans_id, description=...) — tidak perlu user_id
         db.update_transaction(pending['trans_id'], description=text)
         del context.user_data['pending_transaction']
         await update.message.reply_text(
@@ -276,7 +310,6 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text(f"❌ {error_msg}\n\nCoba lagi:")
             return
         amount = parser.parse_amount(text)
-        # update_transaction(trans_id, amount=...) — tidak perlu user_id
         db.update_transaction(pending['trans_id'], amount=amount)
         del context.user_data['pending_transaction']
         await update.message.reply_text(
@@ -285,62 +318,93 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
-# ==================== SALDO / RINGKASAN ====================
+# ==================== SALDO (bulan ini) ====================
 
 async def show_saldo(query, user_id):
-    # get_saldo_info(user_id)
-    saldo_info = calc.get_saldo_info(user_id)
+    month_start = get_month_start()
+    today = get_today()
+    month_label = get_month_label()
+
+    # Data bulan ini
+    income_month = db.get_total_by_type(user_id, 'income', month_start, today)
+    expense_month = db.get_total_by_type(user_id, 'expense', month_start, today)
+    saldo_month = income_month - expense_month
+
+    # Data keseluruhan (untuk referensi)
+    saldo_all = calc.get_saldo_info(user_id)
+
     text = (
-        f"💳 *SALDO*\n\n"
-        f"💰 Saldo Saat Ini:\n*{format_rupiah(saldo_info['saldo'])}*\n\n"
-        f"Total Pemasukan: {format_rupiah(saldo_info['total_income'])}\n"
-        f"Total Pengeluaran: {format_rupiah(saldo_info['total_expense'])}"
+        f"💳 *SALDO — {month_label}*\n\n"
+        f"💰 Pemasukan: {format_rupiah(income_month)}\n"
+        f"💸 Pengeluaran: {format_rupiah(expense_month)}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💵 Saldo Bulan Ini: *{format_rupiah(saldo_month)}*\n\n"
+        f"_Saldo keseluruhan: {format_rupiah(saldo_all['saldo'])}_"
     )
     await safe_edit(query, text,
                     reply_markup=InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")]))
 
 
+# ==================== RINGKASAN (bulan ini) ====================
+
 async def show_ringkasan(query, user_id):
     today = get_today()
-    # get_total_by_type(user_id, trans_type, start_date, end_date)
+    month_start = get_month_start()
+    month_label = get_month_label()
+
+    # Data bulan ini
+    income_month = db.get_total_by_type(user_id, 'income', month_start, today)
+    expense_month = db.get_total_by_type(user_id, 'expense', month_start, today)
+    saldo_month = income_month - expense_month
+
+    # Data hari ini
     income_today = db.get_total_by_type(user_id, 'income', today, today)
     expense_today = db.get_total_by_type(user_id, 'expense', today, today)
-    saldo_info = calc.get_saldo_info(user_id)
-    # get_spending_by_category(user_id, start_date, end_date)
-    spending = db.get_spending_by_category(user_id, today, today)
+
+    # Top spending bulan ini
+    spending_month = db.get_spending_by_category(user_id, month_start, today)
 
     text = (
-        f"📝 *RINGKASAN*\n\n"
-        f"*Overall:*\n"
-        f"Pemasukan: {format_rupiah(saldo_info['total_income'])}\n"
-        f"Pengeluaran: {format_rupiah(saldo_info['total_expense'])}\n"
-        f"Saldo: *{format_rupiah(saldo_info['saldo'])}*\n\n"
+        f"📝 *RINGKASAN — {month_label}*\n\n"
+        f"💰 Pemasukan: {format_rupiah(income_month)}\n"
+        f"💸 Pengeluaran: {format_rupiah(expense_month)}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💵 Saldo Bulan Ini: *{format_rupiah(saldo_month)}*\n\n"
         f"*Hari Ini ({today}):*\n"
         f"💰 Masuk: {format_rupiah(income_today)}\n"
         f"💸 Keluar: {format_rupiah(expense_today)}"
     )
-    if spending:
-        text += "\n\n🔝 *Top Spending Hari Ini:*\n"
-        for i, cat in enumerate(spending[:3], 1):
+    if spending_month:
+        text += f"\n\n🔝 *Top Spending {month_label}:*\n"
+        for i, cat in enumerate(spending_month[:5], 1):
             text += f"{i}. {cat['category']} - {format_rupiah(cat['total'])}\n"
 
     await safe_edit(query, text,
                     reply_markup=InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")]))
 
 
-# ==================== LAPORAN ====================
+# ==================== LAPORAN (teks bulan ini + export all) ====================
 
 async def show_laporan(query, user_id):
+    month_start = get_month_start()
+    today = get_today()
+    month_label = get_month_label()
+
+    # Teks laporan bulan ini
     try:
-        # generate_text_report(user_id)
-        report_text = report_gen.generate_text_report(user_id)
+        report_text = report_gen.generate_text_report(user_id, month_start, today)
     except TypeError:
-        report_text = report_gen.generate_text_report()
+        try:
+            report_text = report_gen.generate_text_report(user_id)
+        except TypeError:
+            report_text = report_gen.generate_text_report()
+
     await query.message.reply_text(report_text, parse_mode='Markdown')
 
+    # Grafik bulan ini
     for gen_fn, caption in [
-        (chart_gen.generate_pie_chart, "📊 Distribusi Pengeluaran per Kategori"),
-        (chart_gen.generate_trend_chart, "📈 Trend Pengeluaran Harian"),
+        (chart_gen.generate_expense_pie_chart, f"📊 Distribusi Pengeluaran — {month_label}"),
+        (chart_gen.generate_trend_chart, f"📈 Trend Pengeluaran — {month_label}"),
     ]:
         try:
             try:
@@ -353,7 +417,7 @@ async def show_laporan(query, user_id):
             logger.warning(f"Chart error: {e}")
 
     await query.message.reply_text(
-        "📥 *Export Laporan:*",
+        f"📥 *Export Laporan Lengkap* (semua bulan, dipisah per bulan):",
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("📄 Export PDF", callback_data="export_pdf"),
@@ -368,7 +432,6 @@ async def show_laporan(query, user_id):
 # ==================== EDIT TRANSAKSI ====================
 
 async def show_edit_menu(query, user_id):
-    # get_unique_dates(user_id, limit)
     dates = db.get_unique_dates(user_id, 30)
     if not dates:
         await safe_edit(query, "❌ Belum ada transaksi.",
@@ -384,7 +447,6 @@ async def show_edit_menu(query, user_id):
 
 
 async def show_transactions_by_date(query, user_id, date: str):
-    # get_transactions_by_date(user_id, date)
     transactions = db.get_transactions_by_date(user_id, date)
     if not transactions:
         await safe_edit(query, f"❌ Tidak ada transaksi pada {date}",
@@ -404,7 +466,6 @@ async def show_transactions_by_date(query, user_id, date: str):
 
 
 async def show_transaction_options(query, trans_id: int):
-    # get_transaction_by_id(trans_id) — tidak perlu user_id
     trans = db.get_transaction_by_id(trans_id)
     if not trans:
         await safe_edit(query, "❌ Transaksi tidak ditemukan",
@@ -480,7 +541,6 @@ async def show_notes_menu(query):
 
 
 async def show_notes_list(query, user_id):
-    # get_all_notes(user_id)
     notes = db.get_all_notes(user_id)
     if not notes:
         await safe_edit(query, "📋 Belum ada notes.",
@@ -535,7 +595,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = query.from_user.id
 
-    # Jawab Telegram DULU agar tidak loading
     try:
         await query.answer()
     except Exception:
@@ -590,7 +649,6 @@ async def _route(update, context, query, data, user_id):
 
     if data.startswith("delete_confirm_"):
         trans_id = int(data.replace("delete_confirm_", ""))
-        # get_transaction_by_id(trans_id) — tidak perlu user_id
         trans = db.get_transaction_by_id(trans_id)
         if trans:
             await safe_edit(query,
@@ -606,9 +664,7 @@ async def _route(update, context, query, data, user_id):
         return
 
     if data.startswith("delete_yes_"):
-        trans_id = int(data.replace("delete_yes_", ""))
-        # delete_transaction(trans_id) — tidak perlu user_id
-        db.delete_transaction(trans_id)
+        db.delete_transaction(int(data.replace("delete_yes_", "")))
         await safe_edit(query, "✅ Transaksi berhasil dihapus!",
                         reply_markup=InlineKeyboardMarkup([[get_home_button()]]))
         return
@@ -623,9 +679,7 @@ async def _route(update, context, query, data, user_id):
         trans_id = int(data.replace("edit_field_desc_", ""))
         await safe_edit(query, "Masukkan keterangan baru:")
         context.user_data['pending_transaction'] = {
-            'step': 'waiting_edit_description',
-            'trans_id': trans_id,
-            'user_id': user_id
+            'step': 'waiting_edit_description', 'trans_id': trans_id, 'user_id': user_id
         }
         return
 
@@ -633,9 +687,7 @@ async def _route(update, context, query, data, user_id):
         trans_id = int(data.replace("edit_field_amount_", ""))
         await safe_edit(query, "Masukkan nominal baru (gunakan titik):\nContoh: 50.000")
         context.user_data['pending_transaction'] = {
-            'step': 'waiting_edit_amount',
-            'trans_id': trans_id,
-            'user_id': user_id
+            'step': 'waiting_edit_amount', 'trans_id': trans_id, 'user_id': user_id
         }
         return
 
@@ -643,7 +695,6 @@ async def _route(update, context, query, data, user_id):
         parts = data.split("_")
         trans_id = int(parts[3])
         new_date = parts[4]
-        # update_transaction(trans_id, date=...) — tidak perlu user_id
         db.update_transaction(trans_id, date=new_date)
         await safe_edit(query, f"✅ Tanggal diubah ke {new_date}",
                         reply_markup=InlineKeyboardMarkup([[get_home_button()]]))
@@ -655,32 +706,25 @@ async def _route(update, context, query, data, user_id):
         prefix = "_".join(parts[4:])
         if action == "prev":
             month -= 1
-            if month < 1:
-                month = 12; year -= 1
+            if month < 1: month = 12; year -= 1
         else:
             month += 1
-            if month > 12:
-                month = 1; year += 1
+            if month > 12: month = 1; year += 1
         await show_calendar_month(query, year, month, prefix)
         return
 
     # ── NOTES ──
     if data == "menu_notes":
         await show_notes_menu(query); return
-
     if data == "notes_add":
         context.user_data['pending_transaction'] = {'step': 'waiting_note', 'user_id': user_id}
         await safe_edit(query,
             "📝 *TAMBAH NOTE*\n\nKetik catatan kamu:\n(Contoh: Reminder bayar listrik tanggal 25)")
         return
-
     if data == "notes_list":
         await show_notes_list(query, user_id); return
-
     if data.startswith("notes_delete_"):
-        note_id = int(data.replace("notes_delete_", ""))
-        # delete_note(note_id) — tidak perlu user_id
-        db.delete_note(note_id)
+        db.delete_note(int(data.replace("notes_delete_", "")))
         await show_notes_list(query, user_id)
         return
 
@@ -693,7 +737,6 @@ async def _route(update, context, query, data, user_id):
                             get_back_and_dashboard("back_to_main")
                         ]))
         return
-
     if data == "settings_categories":
         await show_category_management(query); return
 
@@ -710,9 +753,7 @@ async def _route(update, context, query, data, user_id):
         cat_type = data.replace("cat_add_", "")
         await safe_edit(query, f"Masukkan nama kategori {cat_type}:")
         context.user_data['pending_transaction'] = {
-            'step': 'waiting_category_name',
-            'category_type': cat_type,
-            'user_id': user_id
+            'step': 'waiting_category_name', 'category_type': cat_type, 'user_id': user_id
         }
         return
 
@@ -720,9 +761,7 @@ async def _route(update, context, query, data, user_id):
         emoji = data.replace("emoji_", "")
         pending = context.user_data.get('pending_transaction', {})
         if pending.get('step') == 'select_emoji':
-            # add_category(name, trans_type, icon) — kategori global, tidak perlu user_id
-            success = db.add_category(pending['new_category_name'],
-                                      pending['category_type'], emoji)
+            success = db.add_category(pending['new_category_name'], pending['category_type'], emoji)
             del context.user_data['pending_transaction']
             msg = (f"✅ Kategori ditambahkan!\n\n{emoji} {pending['new_category_name']}"
                    if success else "❌ Kategori dengan nama tersebut sudah ada!")
@@ -735,17 +774,14 @@ async def _route(update, context, query, data, user_id):
     if data == "cat_edit_select_type":
         await safe_edit(query, "Pilih tipe kategori yang ingin diedit:",
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("💰 Pemasukan",
-                                                  callback_data="cat_edit_list_income")],
-                            [InlineKeyboardButton("💸 Pengeluaran",
-                                                  callback_data="cat_edit_list_expense")],
+                            [InlineKeyboardButton("💰 Pemasukan", callback_data="cat_edit_list_income")],
+                            [InlineKeyboardButton("💸 Pengeluaran", callback_data="cat_edit_list_expense")],
                             get_back_and_dashboard("settings_categories", "« Batal")
                         ]))
         return
 
     if data.startswith("cat_edit_list_"):
         cat_type = data.replace("cat_edit_list_", "")
-        # get_categories(trans_type) — global, tidak perlu user_id
         categories = db.get_categories(cat_type)
         keyboard = [[InlineKeyboardButton(f"{c['icon']} {c['name']}",
                      callback_data=f"cat_edit_select_{c['name']}")] for c in categories]
@@ -757,10 +793,8 @@ async def _route(update, context, query, data, user_id):
     if data == "cat_delete_select_type":
         await safe_edit(query, "Pilih tipe kategori yang ingin dihapus:",
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("💰 Pemasukan",
-                                                  callback_data="cat_delete_list_income")],
-                            [InlineKeyboardButton("💸 Pengeluaran",
-                                                  callback_data="cat_delete_list_expense")],
+                            [InlineKeyboardButton("💰 Pemasukan", callback_data="cat_delete_list_income")],
+                            [InlineKeyboardButton("💸 Pengeluaran", callback_data="cat_delete_list_expense")],
                             get_back_and_dashboard("settings_categories", "« Batal")
                         ]))
         return
@@ -777,7 +811,6 @@ async def _route(update, context, query, data, user_id):
 
     if data.startswith("cat_delete_confirm_"):
         cat_name = data.replace("cat_delete_confirm_", "")
-        # delete_category(name) — global, tidak perlu user_id
         success = db.delete_category(cat_name)
         msg = (f"✅ Kategori '{cat_name}' berhasil dihapus!" if success
                else f"❌ Kategori '{cat_name}' tidak bisa dihapus (masih ada transaksi)")
@@ -787,7 +820,7 @@ async def _route(update, context, query, data, user_id):
         ]]))
         return
 
-    # ── EXPORT ──
+    # ── EXPORT (semua data, dipisah per bulan) ──
     if data == "export_pdf":
         try:
             try:
@@ -795,7 +828,7 @@ async def _route(update, context, query, data, user_id):
             except TypeError:
                 f = report_gen.generate_pdf()
             await query.message.reply_document(document=open(f, 'rb'),
-                                               caption="📄 Laporan Keuangan (PDF)")
+                                               caption="📄 Laporan Lengkap (PDF) — semua bulan")
         except Exception as e:
             await query.message.reply_text(f"❌ Error PDF: {e}")
         return
@@ -807,7 +840,7 @@ async def _route(update, context, query, data, user_id):
             except TypeError:
                 f = report_gen.generate_excel()
             await query.message.reply_document(document=open(f, 'rb'),
-                                               caption="📊 Laporan Keuangan (Excel)")
+                                               caption="📊 Laporan Lengkap (Excel) — semua bulan")
         except Exception as e:
             await query.message.reply_text(f"❌ Error Excel: {e}")
         return
@@ -828,7 +861,6 @@ async def _route(update, context, query, data, user_id):
         return
 
     if data == "reset_data_confirm":
-        # reset_user_data(user_id) — hanya hapus data user ini
         db.reset_user_data(user_id)
         await safe_edit(query,
             "✅ *Semua data berhasil dihapus!*\n\nDatabase sudah bersih.\n"
