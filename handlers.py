@@ -423,18 +423,15 @@ async def show_insight(query, user_id):
         )
         return
 
-    header = (
-        f"💡 *INSIGHT & SARAN — {month_label}*\n"
-        f"_{len(insights)} analisis tersedia_"
-    )
-    await safe_edit(query, header)
-
+    text = f"💡 *INSIGHT — {month_label}:*\n\n"
     for i, ins in enumerate(insights, 1):
-        text = f"*[{i}/{len(insights)}]*\n\n{ins}"
-        kb = None
-        if i == len(insights):
-            kb = InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")])
-        await query.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+        text += f"{i}. {ins}\n"
+
+    await safe_edit(
+        query,
+        text.strip(),
+        reply_markup=InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")])
+    )
 
 
 # ==================== LAPORAN (teks bulan ini + export all) ====================
@@ -513,7 +510,7 @@ async def show_transactions_by_date(query, user_id, date: str):
             f"{icon} {trans['category']} - {format_rupiah(trans['amount'])}",
             callback_data=f"edit_trans_{trans['id']}"
         )])
-    keyboard.append(get_back_and_dashboard("menu_settings"))
+    keyboard.append([InlineKeyboardButton("« Kembali", callback_data="menu_settings")])
     d = datetime.strptime(date, "%Y-%m-%d").strftime("%d %b %Y")
     await safe_edit(query, f"📅 *{d}*\n\nPilih transaksi:",
                     reply_markup=InlineKeyboardMarkup(keyboard))
@@ -616,13 +613,28 @@ async def show_notes_list(query, user_id):
 
 # ==================== SETTINGS ====================
 
+async def show_settings_menu(query):
+    """Tampilkan menu Settings — Edit Transaksi, Kelola Kategori, Reset Data."""
+    keyboard = [
+        [InlineKeyboardButton("✏️ Edit Transaksi",  callback_data="menu_edit")],
+        [InlineKeyboardButton("📂 Kelola Kategori", callback_data="settings_categories")],
+        [InlineKeyboardButton("⚠️ Reset Data",      callback_data="menu_reset_data")],
+        [InlineKeyboardButton("« Kembali",          callback_data="back_to_main")],
+    ]
+    await safe_edit(
+        query,
+        "⚙️ *SETTINGS*\n\nPilih menu:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
 async def show_category_management(query):
     await safe_edit(query, "📂 *KELOLA KATEGORI*\n\nPilih aksi:",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("➕ Tambah Kategori", callback_data="cat_add")],
                         [InlineKeyboardButton("✏️ Edit Kategori", callback_data="cat_edit_select_type")],
                         [InlineKeyboardButton("🗑️ Hapus Kategori", callback_data="cat_delete_select_type")],
-                        get_back_and_dashboard("menu_settings")
+                        [InlineKeyboardButton("« Kembali", callback_data="menu_settings")]
                     ]))
 
 
@@ -785,13 +797,7 @@ async def _route(update, context, query, data, user_id):
 
     # ── SETTINGS ──
     if data == "menu_settings":
-        await safe_edit(query, "⚙️ *SETTINGS*\n\nPilih menu:",
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("✏️ Edit Transaksi", callback_data="menu_edit")],
-                            [InlineKeyboardButton("📂 Kelola Kategori", callback_data="settings_categories")],
-                            [InlineKeyboardButton("⚠️ Reset Data", callback_data="menu_reset_data")],
-                            get_back_and_dashboard("back_to_main")
-                        ]))
+        await show_settings_menu(query)
         return
     if data == "settings_categories":
         await show_category_management(query); return
@@ -919,7 +925,7 @@ async def _route(update, context, query, data, user_id):
         await safe_edit(query,
             "✅ *Semua data berhasil dihapus!*\n\nDatabase sudah bersih.\n"
             "Silakan mulai tracking dari awal.",
-            reply_markup=InlineKeyboardMarkup([get_back_and_dashboard("menu_settings")]))
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali", callback_data="menu_settings")]]))
         return
 
     logger.warning(f"Unhandled callback: {data}")
