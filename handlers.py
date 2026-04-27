@@ -394,6 +394,16 @@ async def show_ringkasan(query, user_id):
         for i, cat in enumerate(spending_month[:5], 1):
             text += f"{i}. {cat['category']} - {format_rupiah(cat['total'])}\n"
 
+    # Insights
+    try:
+        insights = calc.generate_insights(user_id)
+        if insights:
+            text += f"\n\n💡 *INSIGHT — {month_label}:*\n"
+            for i, ins in enumerate(insights, 1):
+                text += f"{i}. {ins}\n"
+    except Exception as e:
+        logger.warning(f"Insights error: {e}")
+
     await safe_edit(query, text,
                     reply_markup=InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")]))
 
