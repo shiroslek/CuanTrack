@@ -58,14 +58,29 @@ def get_month_label():
     """Nama bulan + tahun, misal: April 2026."""
     return datetime.now(TIMEZONE).strftime("%B %Y")
 
+def get_last_month_end():
+    """Tanggal terakhir bulan lalu (hari sebelum tanggal 1 bulan ini)."""
+    first_this_month = datetime.now(TIMEZONE).replace(day=1)
+    from datetime import timedelta
+    last_month_last = first_this_month - timedelta(days=1)
+    return last_month_last.strftime("%Y-%m-%d")
+
+def get_saldo_awal_bulan(user_id):
+    """
+    Saldo akhir bulan lalu = semua pemasukan - semua pengeluaran s.d. akhir bulan lalu.
+    Ini otomatis jadi saldo awal bulan ini tanpa perlu input transaksi.
+    """
+    last_end = get_last_month_end()
+    total_inc = db.get_total_by_type(user_id, 'income', end_date=last_end)
+    total_exp = db.get_total_by_type(user_id, 'expense', end_date=last_end)
+    return total_inc - total_exp
+
 def get_home_button():
     return InlineKeyboardButton("🏠 Dashboard", callback_data="back_to_main")
 
 def get_back_and_dashboard(back_callback: str, back_label: str = "« Kembali"):
-    return [
-        InlineKeyboardButton(back_label, callback_data=back_callback),
-        get_home_button()
-    ]
+    """Hanya tombol Kembali — Dashboard sudah ada di persistent keyboard."""
+    return [InlineKeyboardButton(back_label, callback_data=back_callback)]
 
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup([
@@ -116,7 +131,7 @@ async def send_error(query, err: Exception):
         await query.message.reply_text(
             f"❌ Error: `{type(err).__name__}: {err}`\n\nKetuk Dashboard untuk kembali.",
             parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([[get_home_button()]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]])
         )
     except Exception as e:
         logger.error(f"send_error failed: {e}")
@@ -133,14 +148,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"set_setting failed: {e}")
 
     await update.message.reply_text(
-        f"🎉 *Selamat Datang di {BOT_NAME}!*\n\nHalo {user.first_name}! 👋\n\n"
-        "Tombol *🏠 Dashboard* sudah muncul di keyboard kamu — tap kapan saja!",
+        f"🎉 *Selamat Datang di {BOT_NAME}!*\n\nHalo {user.first_name}! 👋\n\nSilakan pilih menu:",
         reply_markup=get_persistent_keyboard(),
         parse_mode='Markdown'
     )
     await update.message.reply_text(
-        "Pilih menu:",
-        reply_markup=get_main_menu_keyboard()
+        "📋 *Menu Utama:*",
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode='Markdown'
     )
 
 
@@ -170,7 +185,7 @@ async def show_category_grid(query, user_id, trans_type: str):
     categories = db.get_categories(trans_type)
     if not categories:
         await safe_edit(query, f"❌ Belum ada kategori {trans_type}. Tambahkan di Settings.",
-                        reply_markup=InlineKeyboardMarkup([[get_home_button()]]))
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]]))
         return
 
     keyboard = []
@@ -252,12 +267,13 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
                            pending['type'], pending['category'],
                            amount, pending['description'])
 
-        # Saldo bulan ini
+        # Saldo bulan ini (carry-over dari bulan lalu + transaksi bulan ini)
         month_start = get_month_start()
         today = get_today()
+        saldo_awal = get_saldo_awal_bulan(uid)
         income_month = db.get_total_by_type(uid, 'income', month_start, today)
         expense_month = db.get_total_by_type(uid, 'expense', month_start, today)
-        saldo_month = income_month - expense_month
+        saldo_month = saldo_awal + income_month - expense_month
 
         trans_name = "Pemasukan" if pending['type'] == 'income' else "Pengeluaran"
         icon = "💰" if pending['type'] == 'income' else "💸"
@@ -271,8 +287,7 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
             f"📝 {pending['description']}\n\n"
             f"💳 Saldo {get_month_label()}: *{format_rupiah(saldo_month)}*",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("« Catat Lagi", callback_data=menu_back)],
-                [get_home_button()]
+                [InlineKeyboardButton("« Catat Lagi", callback_data=menu_back)]
             ]),
             parse_mode='Markdown'
         )
@@ -283,8 +298,7 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(
             f"✅ *Note tersimpan!*\n\n📝 {text}",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("« Kembali ke Notes", callback_data="menu_notes")],
-                [get_home_button()]
+                [InlineKeyboardButton("« Kembali ke Notes", callback_data="menu_notes")]
             ]),
             parse_mode='Markdown'
         )
@@ -300,7 +314,7 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
         del context.user_data['pending_transaction']
         await update.message.reply_text(
             f"✅ Keterangan diubah!\n\n📝 {text}",
-            reply_markup=InlineKeyboardMarkup([[get_home_button()]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]])
         )
 
     elif step == 'waiting_edit_amount':
@@ -313,7 +327,7 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
         del context.user_data['pending_transaction']
         await update.message.reply_text(
             f"✅ Nominal diubah!\n\n💰 {format_rupiah(amount)}",
-            reply_markup=InlineKeyboardMarkup([[get_home_button()]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]])
         )
 
 
@@ -324,21 +338,18 @@ async def show_saldo(query, user_id):
     today = get_today()
     month_label = get_month_label()
 
-    # Data bulan ini
+    saldo_awal = get_saldo_awal_bulan(user_id)
     income_month = db.get_total_by_type(user_id, 'income', month_start, today)
     expense_month = db.get_total_by_type(user_id, 'expense', month_start, today)
-    saldo_month = income_month - expense_month
-
-    # Data keseluruhan (untuk referensi)
-    saldo_all = calc.get_saldo_info(user_id)
+    saldo_month = saldo_awal + income_month - expense_month
 
     text = (
         f"💳 *SALDO — {month_label}*\n\n"
+        f"🔄 Saldo Awal Bulan: {format_rupiah(saldo_awal)}\n"
         f"💰 Pemasukan: {format_rupiah(income_month)}\n"
         f"💸 Pengeluaran: {format_rupiah(expense_month)}\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"💵 Saldo Bulan Ini: *{format_rupiah(saldo_month)}*\n\n"
-        f"_Saldo keseluruhan: {format_rupiah(saldo_all['saldo'])}_"
+        f"💵 Saldo Saat Ini: *{format_rupiah(saldo_month)}*"
     )
     await safe_edit(query, text,
                     reply_markup=InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")]))
@@ -354,7 +365,6 @@ async def show_ringkasan(query, user_id):
     # Data bulan ini
     income_month = db.get_total_by_type(user_id, 'income', month_start, today)
     expense_month = db.get_total_by_type(user_id, 'expense', month_start, today)
-    saldo_month = income_month - expense_month
 
     # Data hari ini
     income_today = db.get_total_by_type(user_id, 'income', today, today)
@@ -363,12 +373,16 @@ async def show_ringkasan(query, user_id):
     # Top spending bulan ini
     spending_month = db.get_spending_by_category(user_id, month_start, today)
 
+    saldo_awal = get_saldo_awal_bulan(user_id)
+    saldo_month = saldo_awal + income_month - expense_month
+
     text = (
         f"📝 *RINGKASAN — {month_label}*\n\n"
+        f"🔄 Saldo Awal Bulan: {format_rupiah(saldo_awal)}\n"
         f"💰 Pemasukan: {format_rupiah(income_month)}\n"
         f"💸 Pengeluaran: {format_rupiah(expense_month)}\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"💵 Saldo Bulan Ini: *{format_rupiah(saldo_month)}*\n\n"
+        f"💵 Saldo Saat Ini: *{format_rupiah(saldo_month)}*\n\n"
         f"*Hari Ini ({today}):*\n"
         f"💰 Masuk: {format_rupiah(income_today)}\n"
         f"💸 Keluar: {format_rupiah(expense_today)}"
@@ -422,7 +436,7 @@ async def show_laporan(query, user_id):
                 InlineKeyboardButton("📄 Export PDF", callback_data="export_pdf"),
                 InlineKeyboardButton("📊 Export Excel", callback_data="export_excel")
             ],
-            [get_home_button()]
+            [InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]
         ]),
         parse_mode='Markdown'
     )
@@ -434,7 +448,7 @@ async def show_edit_menu(query, user_id):
     dates = db.get_unique_dates(user_id, 30)
     if not dates:
         await safe_edit(query, "❌ Belum ada transaksi.",
-                        reply_markup=InlineKeyboardMarkup([[get_home_button()]]))
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]]))
         return
     keyboard = []
     for date in dates[:10]:
@@ -449,7 +463,7 @@ async def show_transactions_by_date(query, user_id, date: str):
     transactions = db.get_transactions_by_date(user_id, date)
     if not transactions:
         await safe_edit(query, f"❌ Tidak ada transaksi pada {date}",
-                        reply_markup=InlineKeyboardMarkup([[get_home_button()]]))
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]]))
         return
     keyboard = []
     for trans in transactions:
@@ -468,7 +482,7 @@ async def show_transaction_options(query, trans_id: int):
     trans = db.get_transaction_by_id(trans_id)
     if not trans:
         await safe_edit(query, "❌ Transaksi tidak ditemukan",
-                        reply_markup=InlineKeyboardMarkup([[get_home_button()]]))
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]]))
         return
     icon = "💰" if trans['type'] == 'income' else "💸"
     trans_name = "Pemasukan" if trans['type'] == 'income' else "Pengeluaran"
@@ -524,7 +538,7 @@ async def show_calendar_month(query, year: int, month: int, callback_prefix: str
                     callback_data=f"{callback_prefix}_{year:04d}-{month:02d}-{day:02d}"
                 ))
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("« Batal", callback_data="menu_edit"), get_home_button()])
+    keyboard.append([InlineKeyboardButton("« Batal", callback_data="menu_edit")])
     await safe_edit(query, "📅 *Pilih Tanggal*", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
@@ -581,8 +595,7 @@ async def show_emoji_selection(update: Update, context: ContextTypes.DEFAULT_TYP
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("« Batal", callback_data="settings_categories"),
-                     get_home_button()])
+    keyboard.append([InlineKeyboardButton("« Batal", callback_data="settings_categories")])
     await update.message.reply_text("Pilih emoji untuk kategori:",
                                     reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -658,14 +671,14 @@ async def _route(update, context, query, data, user_id):
                         InlineKeyboardButton("✅ Ya, Hapus", callback_data=f"delete_yes_{trans_id}"),
                         InlineKeyboardButton("❌ Batal", callback_data=f"edit_trans_{trans_id}")
                     ],
-                    [get_home_button()]
+                    [InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]
                 ]))
         return
 
     if data.startswith("delete_yes_"):
         db.delete_transaction(int(data.replace("delete_yes_", "")))
         await safe_edit(query, "✅ Transaksi berhasil dihapus!",
-                        reply_markup=InlineKeyboardMarkup([[get_home_button()]]))
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]]))
         return
 
     if data.startswith("edit_field_date_"):
@@ -696,7 +709,7 @@ async def _route(update, context, query, data, user_id):
         new_date = parts[4]
         db.update_transaction(trans_id, date=new_date)
         await safe_edit(query, f"✅ Tanggal diubah ke {new_date}",
-                        reply_markup=InlineKeyboardMarkup([[get_home_button()]]))
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]]))
         return
 
     if data.startswith("cal_prev_") or data.startswith("cal_next_"):
@@ -765,8 +778,7 @@ async def _route(update, context, query, data, user_id):
             msg = (f"✅ Kategori ditambahkan!\n\n{emoji} {pending['new_category_name']}"
                    if success else "❌ Kategori dengan nama tersebut sudah ada!")
             await safe_edit(query, msg, reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("« Kembali", callback_data="settings_categories"),
-                get_home_button()
+                InlineKeyboardButton("« Kembali", callback_data="settings_categories")
             ]]))
         return
 
@@ -814,8 +826,7 @@ async def _route(update, context, query, data, user_id):
         msg = (f"✅ Kategori '{cat_name}' berhasil dihapus!" if success
                else f"❌ Kategori '{cat_name}' tidak bisa dihapus (masih ada transaksi)")
         await safe_edit(query, msg, reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("« Kembali", callback_data="settings_categories"),
-            get_home_button()
+            InlineKeyboardButton("« Kembali", callback_data="settings_categories")
         ]]))
         return
 
@@ -864,7 +875,7 @@ async def _route(update, context, query, data, user_id):
         await safe_edit(query,
             "✅ *Semua data berhasil dihapus!*\n\nDatabase sudah bersih.\n"
             "Silakan mulai tracking dari awal.",
-            reply_markup=InlineKeyboardMarkup([[get_home_button()]]))
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]]))
         return
 
     logger.warning(f"Unhandled callback: {data}")
