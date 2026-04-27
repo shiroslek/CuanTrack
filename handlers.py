@@ -427,18 +427,15 @@ async def show_insight(query, user_id):
         )
         return
 
-    header = (
-        f"💡 *INSIGHT & SARAN — {month_label}*\n"
-        f"_{len(insights)} analisis tersedia_"
-    )
-    await safe_edit(query, header)
-
+    text = f"💡 *INSIGHT — {month_label}:*\n\n"
     for i, ins in enumerate(insights, 1):
-        text = f"*[{i}/{len(insights)}]*\n\n{ins}"
-        kb = None
-        if i == len(insights):
-            kb = InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")])
-        await query.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+        text += f"{i}. {ins}\n"
+
+    await safe_edit(
+        query,
+        text,
+        reply_markup=InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")])
+    )
 
 
 # ==================== LAPORAN (teks bulan ini + export all) ====================
