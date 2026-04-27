@@ -7,7 +7,6 @@ by Shiroslek
 
 import logging
 import urllib.request
-import asyncio
 from telegram import Update
 from telegram.error import Conflict, NetworkError, TimedOut
 from telegram.ext import (
@@ -46,14 +45,21 @@ def delete_webhook():
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Global error handler.
+    Conflict dibiarkan — PTB sudah retry otomatis, jangan stop app.
+    """
     err = context.error
+
     if isinstance(err, Conflict):
-        logger.critical("Conflict detected — stopping to let Railway restart cleanly.")
-        await context.application.stop()
+        # Log saja, PTB akan retry sendiri setelah beberapa detik
+        logger.warning("Conflict: another instance briefly active. Will auto-retry.")
         return
+
     if isinstance(err, (NetworkError, TimedOut)):
         logger.warning(f"Network issue (auto-retry): {err}")
         return
+
     logger.error(f"Unhandled error: {err}", exc_info=err)
 
 
@@ -64,7 +70,6 @@ def main():
     logger.info("Database initialized")
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
     application.add_error_handler(error_handler)
 
     application.add_handler(CommandHandler("start", start_command))
