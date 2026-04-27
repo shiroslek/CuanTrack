@@ -483,18 +483,69 @@ async def show_laporan(query, user_id):
 # ==================== EDIT TRANSAKSI ====================
 
 async def show_edit_menu(query, user_id):
-    dates = db.get_unique_dates(user_id, 30)
-    if not dates:
-        await safe_edit(query, "❌ Belum ada transaksi.",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Kembali ke Menu", callback_data="back_to_main")]]))
-        return
-    keyboard = []
-    for date in dates[:10]:
-        d = datetime.strptime(date, "%Y-%m-%d").strftime("%d %b %Y")
-        keyboard.append([InlineKeyboardButton(f"📅 {d}", callback_data=f"edit_date_{date}")])
-    keyboard.append(get_back_and_dashboard("back_to_main"))
-    await safe_edit(query, "✏️ *EDIT TRANSAKSI*\n\nPilih tanggal:",
-                    reply_markup=InlineKeyboardMarkup(keyboard))
+    """Tampilkan kalender untuk pilih tanggal edit transaksi."""
+    now = datetime.now(TIMEZONE)
+    await show_edit_calendar(query, user_id, now.year, now.month)
+
+
+async def show_edit_calendar(query, user_id, year: int, month: int):
+    """
+    Kalender interaktif untuk memilih tanggal transaksi.
+    Tanggal yang ada transaksinya ditandai ·xx·
+    """
+    import calendar as _cal
+
+    # Tanggal yang ada transaksi milik user ini
+    all_dates = db.get_unique_dates(user_id, 3650)
+    has_tx = set(all_dates)
+
+    bulan_id = {
+        1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
+        5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
+        9: "September", 10: "Oktober", 11: "November", 12: "Desember"
+    }
+    header_label = f"{bulan_id[month]} {year}"
+
+    cal_matrix = _cal.monthcalendar(year, month)
+
+    keyboard = [
+        [
+            InlineKeyboardButton("‹", callback_data=f"editcal_prev_{year}_{month}"),
+            InlineKeyboardButton(f"📅 {header_label}", callback_data="cal_ignore"),
+            InlineKeyboardButton("›", callback_data=f"editcal_next_{year}_{month}")
+        ],
+        [InlineKeyboardButton(d, callback_data="cal_ignore")
+         for d in ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"]]
+    ]
+
+    for week in cal_matrix:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(" ", callback_data="cal_ignore"))
+            else:
+                date_str = f"{year:04d}-{month:02d}-{day:02d}"
+                if date_str in has_tx:
+                    # Ada transaksi — bisa diklik, tandai dengan titik
+                    row.append(InlineKeyboardButton(
+                        f"·{day}·",
+                        callback_data=f"editcal_pick_{date_str}"
+                    ))
+                else:
+                    # Tidak ada transaksi — tidak bisa diklik
+                    row.append(InlineKeyboardButton(
+                        str(day),
+                        callback_data="cal_ignore"
+                    ))
+        keyboard.append(row)
+
+    keyboard.append([InlineKeyboardButton("« Kembali", callback_data="menu_settings")])
+
+    await safe_edit(
+        query,
+        "✏️ *EDIT TRANSAKSI*\n\nPilih tanggal:\n_Tanggal ·xx· = ada transaksi_",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
 async def show_transactions_by_date(query, user_id, date: str):
@@ -707,6 +758,28 @@ async def _route(update, context, query, data, user_id):
     # ── EDIT TRANSAKSI ──
     if data == "menu_edit":
         await show_edit_menu(query, user_id); return
+
+    # ── Kalender navigasi bulan ──
+    if data.startswith("editcal_prev_") or data.startswith("editcal_next_"):
+        parts = data.split("_")
+        action = parts[1]        # prev / next
+        year   = int(parts[2])
+        month  = int(parts[3])
+        if action == "prev":
+            month -= 1
+            if month < 1: month = 12; year -= 1
+        else:
+            month += 1
+            if month > 12: month = 1; year += 1
+        await show_edit_calendar(query, user_id, year, month)
+        return
+
+    # ── Tanggal dipilih dari kalender ──
+    if data.startswith("editcal_pick_"):
+        selected_date = data.replace("editcal_pick_", "")
+        await show_transactions_by_date(query, user_id, selected_date)
+        return
+
     if data.startswith("edit_date_") and not data.startswith("edit_date_pick"):
         await show_transactions_by_date(query, user_id, data.replace("edit_date_", "")); return
     if data.startswith("edit_trans_"):
