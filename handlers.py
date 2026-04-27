@@ -94,13 +94,14 @@ def get_main_menu_keyboard():
         ],
         [
             InlineKeyboardButton("📝 Ringkasan", callback_data="menu_ringkasan"),
-            InlineKeyboardButton("📓 Notes", callback_data="menu_notes")
+            InlineKeyboardButton("💡 Insight", callback_data="menu_insight")
         ],
         [
-            InlineKeyboardButton("✏️ Edit Transaksi", callback_data="menu_edit"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings")
+            InlineKeyboardButton("📓 Notes", callback_data="menu_notes"),
+            InlineKeyboardButton("✏️ Edit Transaksi", callback_data="menu_edit")
         ],
         [
+            InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"),
             InlineKeyboardButton("⚠️ Reset Data", callback_data="menu_reset_data")
         ]
     ])
@@ -376,6 +377,7 @@ async def show_ringkasan(query, user_id):
     saldo_awal = get_saldo_awal_bulan(user_id)
     saldo_month = saldo_awal + income_month - expense_month
 
+    # ── Ringkasan keuangan ──
     text = (
         f"📝 *RINGKASAN — {month_label}*\n\n"
         f"🔄 Saldo Awal Bulan: {format_rupiah(saldo_awal)}\n"
@@ -394,6 +396,39 @@ async def show_ringkasan(query, user_id):
 
     await safe_edit(query, text,
                     reply_markup=InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")]))
+
+
+# ==================== INSIGHT ====================
+
+async def show_insight(query, user_id):
+    month_label = get_month_label()
+
+    try:
+        insights = calc.generate_insights(user_id)
+    except Exception as e:
+        logger.warning(f"Insights error: {e}")
+        insights = []
+
+    if not insights:
+        await safe_edit(
+            query,
+            "📝 *Belum ada insight.*\n\nTerus catat transaksi untuk mendapatkan analisis.",
+            reply_markup=InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")])
+        )
+        return
+
+    header = (
+        f"💡 *INSIGHT & SARAN — {month_label}*\n"
+        f"_{len(insights)} analisis tersedia_"
+    )
+    await safe_edit(query, header)
+
+    for i, ins in enumerate(insights, 1):
+        text = f"*[{i}/{len(insights)}]*\n\n{ins}"
+        kb = None
+        if i == len(insights):
+            kb = InlineKeyboardMarkup([get_back_and_dashboard("back_to_main")])
+        await query.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
 
 
 # ==================== LAPORAN (teks bulan ini + export all) ====================
@@ -646,6 +681,8 @@ async def _route(update, context, query, data, user_id):
         await show_saldo(query, user_id); return
     if data == "menu_ringkasan":
         await show_ringkasan(query, user_id); return
+    if data == "menu_insight":
+        await show_insight(query, user_id); return
     if data == "menu_laporan":
         await show_laporan(query, user_id); return
 
