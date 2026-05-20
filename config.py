@@ -13,7 +13,7 @@ import pytz
 # ============================================================================
 
 # Telegram Bot Token (get from @BotFather)
-TELEGRAM_BOT_TOKEN = "8482730888:AAHb0Mm4ZJM-YqGeJYDn9nHM3aaI5vNN9_I"
+TELEGRAM_BOT_TOKEN = "8482730888:AAFfJ73Kt3_Bt61oaINiCIEdwVcQixcFn48"
 
 # Bot Name
 BOT_NAME = "Cuan Track by Shiroslek"
